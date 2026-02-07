@@ -10,6 +10,8 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Chart.js for Analytics -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <!-- Inter Font -->
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -26,7 +28,7 @@
             .no-print { display: none !important; }
             
             body { 
-                background: white; 
+                background: white !important; 
                 min-height: 0 !important;
                 height: auto !important;
                 margin: 0 !important;
@@ -35,7 +37,7 @@
             
             /* Fix navigation to top of page */
             nav {
-                position: static !important; /* Removes sticky behavior */
+                position: static !important;
                 top: 0 !important;
                 height: auto !important;
                 border-bottom: 2px solid #005a9c !important;
@@ -83,6 +85,9 @@
                     <button onclick="switchView('calendar')" id="btn-calendar" class="px-4 py-2 rounded-md text-sm font-medium transition-all text-slate-500 hover:text-slate-900">
                         Calendar View
                     </button>
+                    <button onclick="switchView('dashboard')" id="btn-dashboard" class="px-4 py-2 rounded-md text-sm font-medium transition-all text-slate-500 hover:text-slate-900">
+                        Dashboard
+                    </button>
                 </div>
             </div>
         </div>
@@ -117,7 +122,8 @@
                         
                         <!-- Green Pill Top Right -->
                         <div class="flex items-center">
-                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold uppercase tracking-wider border border-green-200 shadow-sm">
+                            <!-- Added whitespace-nowrap and increased padding to px-4 py-1.5 -->
+                            <span class="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-green-100 text-green-700 text-xs font-bold uppercase tracking-wider border border-green-200 shadow-sm whitespace-nowrap">
                                 <span class="w-2 h-2 rounded-full bg-green-500"></span>
                                 On Call
                             </span>
@@ -134,10 +140,11 @@
             <div class="md:hidden flex bg-slate-100 p-1 rounded-lg no-print">
                 <button onclick="switchView('table')" id="btn-table-m" class="flex-1 py-2 rounded-md text-sm font-medium transition-all shadow-sm bg-white text-slate-900">Table</button>
                 <button onclick="switchView('calendar')" id="btn-calendar-m" class="flex-1 py-2 rounded-md text-sm font-medium transition-all text-slate-500">Calendar</button>
+                <button onclick="switchView('dashboard')" id="btn-dashboard-m" class="flex-1 py-2 rounded-md text-sm font-medium transition-all text-slate-500">Dash</button>
             </div>
 
-            <!-- Toolbar -->
-            <div class="flex flex-col sm:flex-row justify-between gap-4 items-center no-print">
+            <!-- Toolbar (Hidden on Dashboard) -->
+            <div id="toolbar" class="flex flex-col sm:flex-row justify-between gap-4 items-center no-print">
                 <div class="relative w-full sm:w-72">
                     <i data-lucide="search" class="absolute left-3 top-1/2 transform -translate-y-1/2 text-slate-400 w-4 h-4"></i>
                     <input type="text" id="searchInput" placeholder="Search name or week..." 
@@ -183,11 +190,57 @@
                 <!-- Cards injected here -->
             </div>
 
+            <!-- Dashboard View -->
+            <div id="dashboardView" class="hidden space-y-6">
+                <!-- Stats Row -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <div class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2">Total Scheduled Weeks</div>
+                        <div class="text-3xl font-bold text-slate-900" id="statTotalWeeks">-</div>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <div class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2">Most Active Technician</div>
+                        <div class="text-2xl font-bold text-ifes-blue truncate" id="statTopTech">-</div>
+                        <div class="text-xs text-slate-400 mt-1" id="statTopTechCount">Calculating...</div>
+                    </div>
+                    <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <div class="text-slate-500 text-xs font-bold uppercase tracking-wider mb-2">Upcoming Mercy</div>
+                        <div class="text-2xl font-bold text-green-600 truncate" id="statNextMercy">-</div>
+                        <div class="text-xs text-slate-400 mt-1" id="statNextMercyDate">-</div>
+                    </div>
+                </div>
+
+                <!-- Charts Row -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <!-- Bar Chart (Workload) -->
+                    <div class="lg:col-span-2 bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <h3 class="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                            <i data-lucide="bar-chart-2" class="w-4 h-4 text-ifes-blue"></i>
+                            Shift Distribution (Workload)
+                        </h3>
+                        <div class="h-64">
+                            <canvas id="workloadChart"></canvas>
+                        </div>
+                    </div>
+                    <!-- Doughnut Chart (Mercy) -->
+                    <div class="bg-white p-6 rounded-xl border border-slate-200 shadow-sm">
+                        <h3 class="text-sm font-bold text-slate-700 mb-4 flex items-center gap-2">
+                            <i data-lucide="pie-chart" class="w-4 h-4 text-green-600"></i>
+                            Mercy / On Call Split
+                        </h3>
+                        <div class="h-64 flex justify-center">
+                            <canvas id="mercyChart"></canvas>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
         </div>
     </main>
 
     <footer class="bg-slate-50 border-t border-slate-200 mt-auto py-8 text-center no-print">
         <p class="text-sm text-slate-400">© 2026 IFES Electrical Services Ltd. | Internal Roster System</p>
+        <div class="text-xs text-slate-400 mt-2 font-light">Created by Dave Maher</div>
     </footer>
 
     <script>
@@ -198,7 +251,11 @@
         
         let rosterData = [];
         let currentView = 'table';
-        let currentWeekEntry = null; // Store current week to identify it in table
+        let currentWeekEntry = null;
+        
+        // Chart instances
+        let workloadChartInstance = null;
+        let mercyChartInstance = null;
 
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
@@ -213,44 +270,57 @@
         // --- View Switching ---
         function switchView(view) {
             currentView = view;
-            const tableBtn = document.getElementById('btn-table');
-            const calBtn = document.getElementById('btn-calendar');
-            const tableBtnM = document.getElementById('btn-table-m');
-            const calBtnM = document.getElementById('btn-calendar-m');
-            const tableView = document.getElementById('tableView');
-            const calendarView = document.getElementById('calendarView');
+            
+            // Buttons
+            const btns = {
+                table: { d: document.getElementById('btn-table'), m: document.getElementById('btn-table-m') },
+                calendar: { d: document.getElementById('btn-calendar'), m: document.getElementById('btn-calendar-m') },
+                dashboard: { d: document.getElementById('btn-dashboard'), m: document.getElementById('btn-dashboard-m') }
+            };
 
-            // Reset Styles
+            // Views
+            const views = {
+                table: document.getElementById('tableView'),
+                calendar: document.getElementById('calendarView'),
+                dashboard: document.getElementById('dashboardView')
+            };
+            
+            const toolbar = document.getElementById('toolbar');
+
+            // Reset all buttons
             const activeClass = ['bg-white', 'text-slate-900', 'shadow-sm'];
             const inactiveClass = ['text-slate-500', 'hover:text-slate-900', 'bg-transparent', 'shadow-none'];
 
-            // Update Desktop Buttons
-            if (view === 'table') {
-                tableBtn.classList.add(...activeClass);
-                tableBtn.classList.remove(...inactiveClass);
-                calBtn.classList.remove(...activeClass);
-                calBtn.classList.add(...inactiveClass);
-                
-                tableBtnM.classList.add(...activeClass);
-                tableBtnM.classList.remove('text-slate-500');
-                calBtnM.classList.remove(...activeClass);
-                calBtnM.classList.add('text-slate-500');
+            Object.keys(btns).forEach(key => {
+                const isTarget = key === view;
+                const dBtn = btns[key].d;
+                const mBtn = btns[key].m;
 
-                tableView.classList.remove('hidden');
-                calendarView.classList.add('hidden');
+                if (isTarget) {
+                    dBtn.classList.add(...activeClass);
+                    dBtn.classList.remove(...inactiveClass);
+                    mBtn.classList.add(...activeClass);
+                    mBtn.classList.remove('text-slate-500');
+                } else {
+                    dBtn.classList.remove(...activeClass);
+                    dBtn.classList.add(...inactiveClass);
+                    mBtn.classList.remove(...activeClass);
+                    mBtn.classList.add('text-slate-500');
+                }
+            });
+
+            // Toggle Views
+            Object.keys(views).forEach(key => {
+                if (key === view) views[key].classList.remove('hidden');
+                else views[key].classList.add('hidden');
+            });
+
+            // Handle Toolbar visibility (Hide search on dashboard)
+            if (view === 'dashboard') {
+                toolbar.classList.add('hidden');
+                renderDashboard(); // Trigger chart render
             } else {
-                calBtn.classList.add(...activeClass);
-                calBtn.classList.remove(...inactiveClass);
-                tableBtn.classList.remove(...activeClass);
-                tableBtn.classList.add(...inactiveClass);
-
-                calBtnM.classList.add(...activeClass);
-                calBtnM.classList.remove('text-slate-500');
-                tableBtnM.classList.remove(...activeClass);
-                tableBtnM.classList.add('text-slate-500');
-
-                tableView.classList.add('hidden');
-                calendarView.classList.remove('hidden');
+                toolbar.classList.remove('hidden');
             }
         }
 
@@ -274,11 +344,10 @@
                         weekEnding: findVal('Week Ending') || findVal('Date') || '',
                         name: findVal('Name') || 'Unassigned',
                         generator: findVal('Generator') || '-',
-                        mercyRaw: findVal('Mercy') || '-' // Store raw value for logic
+                        mercyRaw: findVal('Mercy') || '-' 
                     };
                 });
 
-                // Filter out rows where Name OR Week is missing
                 rosterData = rosterData.filter(item => 
                     item.name && item.name.trim() !== '' && 
                     item.week && item.week.trim() !== ''
@@ -332,7 +401,6 @@
         // --- Logic Helpers ---
 
         function isMercyOnCall(val) {
-            // Case insensitive check for "IFES"
             return val && val.toUpperCase().includes('IFES');
         }
 
@@ -379,7 +447,6 @@
                 }
             });
 
-            // Set global variable for table highlighting
             currentWeekEntry = currentItem;
 
             const dashboard = document.getElementById('currentShiftCard');
@@ -412,6 +479,130 @@
             }
         }
 
+        // --- Dashboard Logic ---
+        function renderDashboard() {
+            if (!rosterData.length) return;
+
+            // 1. Calculate Statistics
+            const nameCounts = {};
+            let mercyCount = 0;
+            let totalWeeks = rosterData.length;
+            let upcomingMercy = { name: '-', date: '-' };
+            
+            const today = new Date();
+            today.setHours(0,0,0,0);
+            
+            let foundNextMercy = false;
+
+            rosterData.forEach(row => {
+                // Count workload
+                if (nameCounts[row.name]) nameCounts[row.name]++;
+                else nameCounts[row.name] = 1;
+
+                // Count mercy
+                if (isMercyOnCall(row.mercyRaw)) {
+                    mercyCount++;
+                    // Find upcoming mercy
+                    if (!foundNextMercy) {
+                        const d = parseDate(row.weekEnding);
+                        if (d && d > today) {
+                            upcomingMercy = { name: row.name, date: row.weekEnding };
+                            foundNextMercy = true;
+                        }
+                    }
+                }
+            });
+
+            // Detect Ties for "Most Active"
+            let maxCount = 0;
+            for (const count of Object.values(nameCounts)) {
+                if (count > maxCount) maxCount = count;
+            }
+
+            const topTechs = Object.entries(nameCounts)
+                .filter(([name, count]) => count === maxCount)
+                .map(([name]) => name);
+
+            const totalTechs = Object.keys(nameCounts).length;
+
+            if (topTechs.length === totalTechs && totalTechs > 0) {
+                 // Perfect balance
+                 document.getElementById('statTopTech').textContent = "Balanced Schedule";
+                 document.getElementById('statTopTechCount').textContent = `${maxCount} shifts each across ${totalTechs} techs`;
+            } else if (topTechs.length > 1) {
+                 // Tie
+                 document.getElementById('statTopTech').textContent = `${topTechs.length} Techs Tied`;
+                 document.getElementById('statTopTechCount').textContent = `${maxCount} shifts each (${topTechs.slice(0, 2).join(', ')}...)`;
+            } else {
+                 // Single winner
+                 document.getElementById('statTopTech').textContent = topTechs[0];
+                 document.getElementById('statTopTechCount').textContent = `${maxCount} shifts assigned`;
+            }
+
+            // Update DOM Stats
+            document.getElementById('statTotalWeeks').textContent = totalWeeks;
+            document.getElementById('statNextMercy').textContent = upcomingMercy.name;
+            document.getElementById('statNextMercyDate').textContent = upcomingMercy.date;
+
+            // 2. Render Charts using Chart.js
+            
+            // Workload Chart Data
+            const labels = Object.keys(nameCounts);
+            const dataCounts = Object.values(nameCounts);
+
+            // Destroy old charts if they exist
+            if (workloadChartInstance) workloadChartInstance.destroy();
+            if (mercyChartInstance) mercyChartInstance.destroy();
+
+            // Create Workload Bar Chart
+            const ctx1 = document.getElementById('workloadChart').getContext('2d');
+            workloadChartInstance = new Chart(ctx1, {
+                type: 'bar',
+                data: {
+                    labels: labels,
+                    datasets: [{
+                        label: 'Weeks Assigned',
+                        data: dataCounts,
+                        backgroundColor: '#005a9c',
+                        borderRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false }
+                    },
+                    scales: {
+                        y: { beginAtZero: true, ticks: { stepSize: 1 } },
+                        x: { ticks: { autoSkip: false, maxRotation: 45, minRotation: 45 } }
+                    }
+                }
+            });
+
+            // Create Mercy Pie Chart
+            const ctx2 = document.getElementById('mercyChart').getContext('2d');
+            mercyChartInstance = new Chart(ctx2, {
+                type: 'doughnut',
+                data: {
+                    labels: ['On Call (Mercy)', 'Regular Duties'],
+                    datasets: [{
+                        data: [mercyCount, totalWeeks - mercyCount],
+                        backgroundColor: ['#16a34a', '#e2e8f0'], // Green for Mercy, Grey for off
+                        borderWidth: 0
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    cutout: '70%',
+                    plugins: {
+                        legend: { position: 'bottom' }
+                    }
+                }
+            });
+        }
+
         // --- Rendering ---
         function renderAll(search = '') {
             const lowerSearch = search.toLowerCase();
@@ -421,7 +612,7 @@
 
             renderTable(filtered);
             renderCalendar(filtered);
-
+            
             if (filtered.length === 0) {
                 document.getElementById('emptySearch').classList.remove('hidden');
             } else {
@@ -432,7 +623,6 @@
         function renderTable(data) {
             const tbody = document.getElementById('rosterTableBody');
             tbody.innerHTML = data.map(row => {
-                // Check if this row matches the current week
                 const isCurrent = currentWeekEntry && 
                                 row.week === currentWeekEntry.week && 
                                 row.weekEnding === currentWeekEntry.weekEnding;
