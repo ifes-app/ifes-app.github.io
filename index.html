@@ -23,9 +23,36 @@
 
         /* Print styles */
         @media print {
-            .no-print { display: none; }
-            body { background: white; }
+            .no-print { display: none !important; }
+            
+            body { 
+                background: white; 
+                min-height: 0 !important;
+                height: auto !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            
+            /* Fix navigation to top of page */
+            nav {
+                position: static !important; /* Removes sticky behavior */
+                top: 0 !important;
+                height: auto !important;
+                border-bottom: 2px solid #005a9c !important;
+                padding-bottom: 10px !important;
+                margin-bottom: 20px !important;
+            }
+            
+            /* Pull main content up */
+            main {
+                padding-top: 10px !important;
+                margin-top: 0 !important;
+            }
+
             .print-break { page-break-inside: avoid; }
+            
+            /* Ensure background colors print if user has that setting enabled, otherwise provide borders */
+            .bg-blue-50 { border: 1px solid #e2e8f0; }
         }
     </style>
 </head>
@@ -73,13 +100,12 @@
         <div id="mainContent" class="hidden space-y-8">
             
             <!-- Hero Card: Who is on this week? -->
-            <!-- Updated to White/Light Blue theme for readability -->
-            <div class="bg-white border-t-4 border-ifes-blue rounded-2xl shadow-lg p-6 md:p-8 relative overflow-hidden">
+            <div class="bg-white border-t-4 border-ifes-blue rounded-2xl shadow-lg p-6 md:p-8 relative overflow-hidden print-break">
                 <!-- Decorative background elements -->
                 <div class="absolute top-0 right-0 w-64 h-64 bg-blue-50 rounded-full -translate-y-1/2 translate-x-1/2 pointer-events-none"></div>
                 
                 <div class="relative z-10">
-                    <div class="flex flex-col md:flex-row justify-between md:items-start gap-4 mb-6">
+                    <div class="flex justify-between items-start mb-6">
                         <div>
                             <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-ifes-blue text-xs font-bold uppercase tracking-wider mb-2 border border-blue-200">
                                 <span class="w-2 h-2 rounded-full bg-ifes-blue animate-pulse"></span>
@@ -88,8 +114,13 @@
                             <h2 class="text-3xl font-bold text-slate-900">This Week's Team</h2>
                             <p id="currentWeekRange" class="text-slate-500 mt-1 font-medium">Week Ending: Loading...</p>
                         </div>
-                        <div class="hidden md:block">
-                            <i data-lucide="calendar-clock" class="w-12 h-12 text-blue-100"></i>
+                        
+                        <!-- Green Pill Top Right -->
+                        <div class="flex items-center">
+                            <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-green-100 text-green-700 text-xs font-bold uppercase tracking-wider border border-green-200 shadow-sm">
+                                <span class="w-2 h-2 rounded-full bg-green-500"></span>
+                                On Call
+                            </span>
                         </div>
                     </div>
 
@@ -131,10 +162,10 @@
                         <thead>
                             <tr class="bg-slate-50 border-b border-slate-200">
                                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Week #</th>
-                                <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Week Ending</th>
                                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Name</th>
                                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Generator</th>
                                 <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider">Mercy Status</th>
+                                <th class="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider text-right">Week Ending</th>
                             </tr>
                         </thead>
                         <tbody id="rosterTableBody" class="divide-y divide-slate-100">
@@ -167,6 +198,7 @@
         
         let rosterData = [];
         let currentView = 'table';
+        let currentWeekEntry = null; // Store current week to identify it in table
 
         // --- Initialization ---
         document.addEventListener('DOMContentLoaded', () => {
@@ -238,7 +270,7 @@
                     };
 
                     return {
-                        week: findVal('Week') || findVal('Wk') || '#',
+                        week: findVal('Week') || findVal('Wk') || '',
                         weekEnding: findVal('Week Ending') || findVal('Date') || '',
                         name: findVal('Name') || 'Unassigned',
                         generator: findVal('Generator') || '-',
@@ -246,8 +278,11 @@
                     };
                 });
 
-                // Filter out empty rows
-                rosterData = rosterData.filter(item => item.name && item.name.trim() !== '');
+                // Filter out rows where Name OR Week is missing
+                rosterData = rosterData.filter(item => 
+                    item.name && item.name.trim() !== '' && 
+                    item.week && item.week.trim() !== ''
+                );
 
                 document.getElementById('loadingState').classList.add('hidden');
                 document.getElementById('mainContent').classList.remove('hidden');
@@ -344,6 +379,9 @@
                 }
             });
 
+            // Set global variable for table highlighting
+            currentWeekEntry = currentItem;
+
             const dashboard = document.getElementById('currentShiftCard');
             const weekRange = document.getElementById('currentWeekRange');
 
@@ -355,13 +393,13 @@
                     : `<div class="text-slate-400 font-medium">OFF</div>`;
 
                 dashboard.innerHTML = `
-                    <div class="bg-blue-50/50 rounded-xl p-4 border border-blue-100">
+                    <div class="bg-blue-50/50 rounded-xl p-4 border border-blue-100 relative group">
                         <div class="text-slate-400 text-xs uppercase tracking-wider mb-1 font-bold">On Duty</div>
-                        <div class="text-2xl font-bold text-slate-800 truncate">${currentItem.name}</div>
+                        <div class="text-2xl font-bold text-slate-800 truncate pr-6">${currentItem.name}</div>
                     </div>
-                    <div class="bg-blue-50/50 rounded-xl p-4 border border-blue-100">
+                    <div class="bg-blue-50/50 rounded-xl p-4 border border-blue-100 relative">
                         <div class="text-slate-400 text-xs uppercase tracking-wider mb-1 font-bold">Generator</div>
-                        <div class="text-xl font-semibold text-slate-700 truncate">${currentItem.generator}</div>
+                        <div class="text-xl font-semibold text-slate-700 truncate pr-6">${currentItem.generator}</div>
                     </div>
                     <div class="bg-blue-50/50 rounded-xl p-4 border border-blue-100">
                         <div class="text-slate-400 text-xs uppercase tracking-wider mb-1 font-bold">Mercy</div>
@@ -393,23 +431,45 @@
 
         function renderTable(data) {
             const tbody = document.getElementById('rosterTableBody');
-            tbody.innerHTML = data.map(row => `
-                <tr class="hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0">
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-500 font-medium">${row.week}</td>
-                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900">${row.weekEnding}</td>
+            tbody.innerHTML = data.map(row => {
+                // Check if this row matches the current week
+                const isCurrent = currentWeekEntry && 
+                                row.week === currentWeekEntry.week && 
+                                row.weekEnding === currentWeekEntry.weekEnding;
+
+                const rowClass = isCurrent 
+                    ? "bg-blue-50 border-l-4 border-l-ifes-blue border-b border-blue-100 shadow-sm" 
+                    : "hover:bg-slate-50 transition-colors border-b border-slate-100 last:border-0 border-l-4 border-l-transparent";
+                
+                const weekContent = isCurrent 
+                    ? `<div class="flex items-center gap-2 text-ifes-blue font-bold">${row.week}</div>` 
+                    : `<span class="text-slate-500 font-medium">${row.week}</span>`;
+
+                return `
+                <tr class="${rowClass}">
+                    <td class="px-6 py-4 whitespace-nowrap text-sm">${weekContent}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-semibold text-slate-900">${row.name}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-600">${row.generator}</td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm">
                         ${getMercyBadgeHTML(row.mercyRaw)}
                     </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-slate-900 text-right font-mono">${row.weekEnding}</td>
                 </tr>
-            `).join('');
+            `}).join('');
         }
 
         function renderCalendar(data) {
             const container = document.getElementById('calendarView');
-            container.innerHTML = data.map(row => `
-                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 hover:shadow-md transition-shadow print-break">
+            container.innerHTML = data.map(row => {
+                const isCurrent = currentWeekEntry && 
+                                row.week === currentWeekEntry.week && 
+                                row.weekEnding === currentWeekEntry.weekEnding;
+                
+                const borderClass = isCurrent ? "border-ifes-blue ring-1 ring-ifes-blue" : "border-slate-200";
+                const bgClass = isCurrent ? "bg-blue-50/30" : "bg-white";
+
+                return `
+                <div class="${bgClass} rounded-xl shadow-sm border ${borderClass} p-5 hover:shadow-md transition-all print-break relative">
                     <div class="flex justify-between items-start mb-4">
                         <div>
                             <span class="text-xs font-bold text-slate-400 uppercase tracking-wider">Week ${row.week}</span>
@@ -443,7 +503,7 @@
                         </div>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
             lucide.createIcons();
         }
 
