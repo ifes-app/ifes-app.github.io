@@ -24,7 +24,20 @@
 <body>
 <div id="root"></div>
 
-<script type="text/babel" data-presets="env,react">
+<script>
+/* If startup fails, show the error instead of a white screen */
+window.addEventListener('error', function(e){
+  var root = document.getElementById('root');
+  if (root && !root.hasChildNodes()){
+    root.innerHTML = '<pre style="padding:20px;color:#b00020;white-space:pre-wrap;'
+      + 'font:13px/1.5 ui-monospace,Menlo,monospace">Startup error:\n\n'
+      + ((e && (e.message || e.error)) || 'unknown') + '\n\nOpen the browser console (F12) for detail.</pre>';
+  }
+});
+</script>
+
+<script type="text/babel" data-presets="react">
+/* eslint-disable */
 const { useState, useEffect } = React;
 
 /* ======================================================================
