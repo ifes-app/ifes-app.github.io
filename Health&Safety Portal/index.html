@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>IFES Health &amp; Safety Portal.</title>
+<title>IFES Health &amp; Safety Portal</title>
 <link rel="icon" href="https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp" />
 
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -61,6 +61,15 @@ const daysUntil=(iso)=>{ if(!iso)return null; return Math.ceil((new Date(iso)-ne
 const genPassword=()=>{ const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<8;i++)s+=c[Math.floor(Math.random()*c.length)]; return s; };
 const safeName=(n)=>String(n).replace(/[^A-Za-z0-9]+/g,'_');
 
+function errText(r){
+  if(!r) return 'No reply from the server.';
+  if(r.error==='unknown_action') return 'Your backend is running an OLD version. In Apps Script: Deploy > Manage deployments > pencil > Version: New version > Deploy.';
+  if(r.error==='auth') return 'Your session expired. Log out and back in.';
+  if(r.error==='forbidden') return 'Your login does not have permission for that.';
+  if(r.error==='exists') return 'That one already exists.';
+  if(r.message) return r.message;
+  return 'Server said: '+(r.error||'unknown error');
+}
 async function api(action,payload){
   let res;
   try{ res=await fetch(backendUrl(),{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify(Object.assign({action},payload))}); }
@@ -127,24 +136,22 @@ function App(){
 
   useEffect(()=>{ (async()=>{
     const sess=store.get(SESS);
-    if(sess&&sess.token&&backendReady()){
-      try{ const r=await api('session',{token:sess.token}); if(r.ok) setMe(Object.assign({token:sess.token},r)); else store.del(SESS); }catch(e){}
-    }
+    if(sess&&sess.token&&sess.me&&backendReady()){ setMe(Object.assign({token:sess.token},sess.me)); }
     setReady(true);
   })(); },[]);
 
+  const [loadErr,setLoadErr]=useState('');
   const loadData=async()=>{
     const tk=me&&me.token; if(!tk)return;
     try{
-      const e=await api('listEmployees',{token:tk}); if(e.ok)setEmployees(e.employees);
-      const tr=await api('listTraining',{token:tk}); if(tr.ok)setTraining(tr.training);
-      const c=await api('listCourses',{token:tk}); if(c.ok)setCourses(c.courses);
-      if(me.role==='admin'||me.role==='superadmin'){ const u=await api('listUsers',{token:tk}); if(u.ok)setUsers(u.users); }
-    }catch(e){}
+      const r=await api('bootstrap',{token:tk});
+      if(r.ok){ setEmployees(r.employees||[]); setTraining(r.training||[]); setCourses(r.courses||[]); if(r.users)setUsers(r.users); setLoadErr(''); }
+      else setLoadErr(errText(r));
+    }catch(e){ setLoadErr('Could not reach the server.'); }
   };
   useEffect(()=>{ if(me){ setTab(isAdmin?'dashboard':'give'); loadData(); } },[me]);
 
-  const onLogin=(d)=>{ store.set(SESS,{token:d.token}); setMe(d); };
+  const onLogin=(d)=>{ store.set(SESS,{token:d.token,me:{username:d.username,name:d.name,role:d.role}}); setMe(d); };
   const logout=()=>{ store.del(SESS); setMe(null); setUsers([]); setEmployees([]); setTraining([]); };
 
   if(!ready) return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading...</div>;
@@ -176,6 +183,7 @@ function App(){
         </div>
       </nav>
       <main className="max-w-6xl mx-auto px-4 py-8">
+        {loadErr && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{loadErr}</div>}
         {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} onDelete={loadData} me={me} />}
         {tab==='give' && <GiveTraining t={t} employees={employees} courses={courses} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
         {tab==='employees' && isAdmin && <Employees t={t} employees={employees} reload={loadData} />}
@@ -223,7 +231,7 @@ function GiveTraining({ t, employees, courses, isAdmin, onIssued, reloadCourses 
   const [sel,setSel]=useState({}); const [type,setType]=useState('');
   const [newCourse,setNewCourse]=useState(''); const [showCourses,setShowCourses]=useState(false);
   useEffect(()=>{ if((!type||typeList.indexOf(type)<0)&&typeList.length) setType(typeList[0]); },[courses]);
-  const addCourse=async()=>{ const n=newCourse.trim(); if(!n)return; const tk=store.get(SESS).token; const r=await api('addCourse',{token:tk,name:n}); if(r.ok){ setNewCourse(''); reloadCourses(); setType(n); } else alert(r.error==='exists'?'That course already exists.':'Could not add course.'); };
+  const addCourse=async()=>{ const n=newCourse.trim(); if(!n)return; const tk=store.get(SESS).token; const r=await api('addCourse',{token:tk,name:n}); if(r.ok){ setNewCourse(''); reloadCourses(); setType(n); } else alert(errText(r)); };
   const delCourse=async(n)=>{ if(!window.confirm('Remove course "'+n+'"?'))return; const tk=store.get(SESS).token; await api('deleteCourse',{token:tk,name:n}); reloadCourses(); };
   const [date,setDate]=useState(todayISO()); const [q,setQ]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(null);
@@ -353,14 +361,14 @@ function Employees({ t, employees, reload }){
   const [msg,setMsg]=useState(null); const [bulkMsg,setBulkMsg]=useState(null); const [busy,setBusy]=useState(false);
   const add=async(e)=>{ e.preventDefault(); if(!name.trim())return; setBusy(true); setMsg(null);
     const tk=store.get(SESS).token; const r=await api('addEmployee',{token:tk,employee:{name:name.trim(),email:email.trim()}}); setBusy(false);
-    if(r.ok){ setName(''); setEmail(''); reload(); } else setMsg({bad:true,text:'Could not add.'});
+    if(r.ok){ setName(''); setEmail(''); reload(); } else setMsg({bad:true,text:errText(r)});
   };
   const onFile=async(e)=>{ const f=e.target.files[0]; if(!f)return; setBulkMsg(null);
     try{ const wb=XLSX.read(await f.arrayBuffer()); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
       const emps=rows.map(r=>{ const low={}; Object.keys(r).forEach(k=>low[k.toString().trim().toLowerCase()]=r[k]); return {name:String(low.name||'').trim(),email:String(low.email||'').trim()}; }).filter(x=>x.name);
       if(emps.length===0){ setBulkMsg({bad:true,text:'No rows found. Needs columns: name, email.'}); e.target.value=''; return; }
       const tk=store.get(SESS).token; const r=await api('bulkAddEmployees',{token:tk,employees:emps});
-      if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added} employees.`}); reload(); } else setBulkMsg({bad:true,text:'Upload failed.'});
+      if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added} employees.`}); reload(); } else setBulkMsg({bad:true,text:errText(r)});
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); }
     e.target.value='';
   };
@@ -408,7 +416,7 @@ function People({ t, me, users, reload }){
   const add=async(e)=>{ e.preventDefault(); setMsg(null); setCreated(null); setBusy(true);
     const tk=store.get(SESS).token; const r=await api('addUser',{token:tk,user:f}); setBusy(false);
     if(r.ok){ setCreated({username:f.username,password:f.password}); setF({username:'',name:'',email:'',role:'user',password:genPassword()}); reload(); }
-    else if(r.error==='exists') setMsg({bad:true,text:'That username already exists.'}); else setMsg({bad:true,text:'Could not add.'});
+    else setMsg({bad:true,text:errText(r)});
   };
   const onFile=async(e)=>{ const file=e.target.files[0]; if(!file)return; setBulkMsg(null);
     try{ const wb=XLSX.read(await file.arrayBuffer()); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
@@ -416,7 +424,7 @@ function People({ t, me, users, reload }){
         return {username:String(low.username||'').trim(),name:String(low.name||low.username||'').trim(),email:String(low.email||'').trim(),role:(String(low.role||'user').trim().toLowerCase()==='admin'&&canMakeAdmin)?'admin':'user',password:String(low.password||'').trim()||genPassword()}; }).filter(u=>u.username);
       if(us.length===0){ setBulkMsg({bad:true,text:'Needs columns: username, name, email, role, password.'}); e.target.value=''; return; }
       const tk=store.get(SESS).token; const r=await api('bulkAddUsers',{token:tk,users:us});
-      if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added}, skipped ${r.skipped}.`}); reload(); } else setBulkMsg({bad:true,text:'Upload failed.'});
+      if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added}, skipped ${r.skipped}.`}); reload(); } else setBulkMsg({bad:true,text:errText(r)});
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); } e.target.value='';
   };
   const del=async(u)=>{ if(!window.confirm('Remove '+u.username+'?'))return; const tk=store.get(SESS).token; const r=await api('deleteUser',{token:tk,username:u.username}); if(r.ok)reload(); else alert('Could not remove.'); };
