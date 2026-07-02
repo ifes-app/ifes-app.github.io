@@ -28,12 +28,24 @@
 const { useState, useEffect } = React;
 
 /* ======================================================================
-   CONFIGURATION  -  paste your Apps Script /exec URL here after deploying
+   CONFIGURATION
+   ----------------------------------------------------------------------
+   Your Apps Script web app URL looks like:
+     https://script.google.com/macros/s/AAAA....(long code)....ZZZZ/exec
+   Split it: put EVERYTHING except the last 12 characters of that long code
+   into BACKEND_PREFIX below (keep it ending right before those 12 chars,
+   no /exec). The last 12 characters are the ACCESS CODE you give staff -
+   the app asks for it once per device and saves it. The full address never
+   appears in this file.
    ====================================================================== */
 const CONFIG = {
-  BACKEND_URL: "PASTE_YOUR_APPS_SCRIPT_EXEC_URL_HERE",
+  BACKEND_PREFIX: "https://script.google.com/macros/s/AKfycbzy5Z4XF0z9Q7KnuO7TDgS23cWj3lX1dyOTiw81KC09fxZAkFZShjzRUZ",
   DEFAULT_THEME: "ifes"
 };
+
+let BACKEND_CODE = (function(){ try { return JSON.parse(localStorage.getItem('backend_code')) || ''; } catch(e){ return ''; } })();
+const backendReady = () => BACKEND_CODE.length > 0;
+const backendUrl = () => CONFIG.BACKEND_PREFIX + BACKEND_CODE + "/exec";
 
 /* The exact certificate (your file) embedded as a template, filled in the
    browser so it stays pixel-identical. */
@@ -63,12 +75,16 @@ const genPassword = () => {
 };
 
 async function api(action, payload){
-  const res = await fetch(CONFIG.BACKEND_URL, {
-    method:'POST',
-    headers:{ 'Content-Type':'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ action }, payload))
-  });
-  return res.json();
+  let res;
+  try {
+    res = await fetch(backendUrl(), {
+      method:'POST',
+      headers:{ 'Content-Type':'text/plain;charset=utf-8' },
+      body: JSON.stringify(Object.assign({ action }, payload))
+    });
+  } catch(e){ throw { code:'network' }; }
+  try { return await res.json(); }
+  catch(e){ throw { code:'bad_endpoint' }; }   // usually a wrong access code
 }
 
 /* Fill the exact certificate in the browser. Returns { blob, base64 }. */
@@ -145,7 +161,7 @@ function App(){
   /* resume session */
   useEffect(()=>{ (async()=>{
     const sess = store.get(SESS);
-    if (sess && sess.token && CONFIG.BACKEND_URL.indexOf('http') === 0){
+    if (sess && sess.token && backendReady()){
       try { const r = await api('session', { token: sess.token });
         if (r.ok){ setMe(Object.assign({ token: sess.token }, r)); }
         else store.del(SESS);
@@ -219,16 +235,29 @@ function App(){
 function Login({ t, theme, setTheme, onLogin }){
   const [username, setU] = useState('');
   const [password, setP] = useState('');
+  const [code, setCode] = useState('');
+  const [needCode, setNeedCode] = useState(!backendReady());
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   const submit = async (e) => {
     e.preventDefault(); setErr(''); setBusy(true);
     try {
-      if (CONFIG.BACKEND_URL.indexOf('http') !== 0){ setErr('Backend URL not set in the app yet.'); setBusy(false); return; }
+      if (CONFIG.BACKEND_PREFIX.indexOf('http') !== 0){ setErr('Backend not set up in the app yet.'); setBusy(false); return; }
+      if (needCode){
+        if (!code.trim()){ setErr('Enter your access code.'); setBusy(false); return; }
+        BACKEND_CODE = code.trim();
+      }
       const r = await api('login', { username: username.trim(), password });
-      if (r.ok) onLogin({ username:r.username, name:r.name, role:r.role, token:r.token });
-      else setErr('Wrong username or password.');
-    } catch(e){ setErr('Could not reach the server. Check the backend URL.'); }
+      if (r.ok){
+        store.set('backend_code', BACKEND_CODE);   // remember the code on this device
+        onLogin({ username:r.username, name:r.name, role:r.role, token:r.token });
+      } else {
+        setErr('Wrong username or password.');
+      }
+    } catch(e){
+      if (e && e.code === 'bad_endpoint'){ setErr('That access code does not match. Check the last 12 characters.'); if(needCode) BACKEND_CODE=''; }
+      else setErr('Could not reach the server. Check your internet.');
+    }
     finally { setBusy(false); }
   };
   return (
@@ -239,6 +268,13 @@ function Login({ t, theme, setTheme, onLogin }){
           <p className="text-white/80 text-sm mt-1">Health &amp; Safety Portal</p>
         </div>
         <div className="p-8 space-y-4">
+          {needCode && (
+            <div>
+              <label className="block text-sm font-semibold text-slate-700 mb-1">Access code <span className="font-normal text-slate-400">(first time on this device)</span></label>
+              <input value={code} onChange={e=>setCode(e.target.value)} placeholder="12-character code"
+                className="w-full border border-slate-300 rounded-lg px-3 py-2.5 font-mono focus:ring-2 focus:outline-none" style={{ '--tw-ring-color':t.primary }} />
+            </div>
+          )}
           <div>
             <label className="block text-sm font-semibold text-slate-700 mb-1">Username</label>
             <input autoFocus value={username} onChange={e=>setU(e.target.value)}
@@ -253,6 +289,7 @@ function Login({ t, theme, setTheme, onLogin }){
             </div>
           </div>
           {err && <p className="text-sm text-red-600 font-medium">{err}</p>}
+          {!needCode && <button type="button" onClick={()=>{ setNeedCode(true); }} className="text-xs text-slate-400 underline">Use a different access code</button>}
           <button disabled={busy} style={{ backgroundColor: t.secondary }}
             className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 transition disabled:opacity-60">
             {busy?'Signing in...':'Sign in'}
