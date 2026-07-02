@@ -121,6 +121,7 @@ function App(){
   const [users,setUsers]=useState([]);
   const [employees,setEmployees]=useState([]);
   const [training,setTraining]=useState([]);
+  const [courses,setCourses]=useState([]);
   const [showPw,setShowPw]=useState(false);
   const isAdmin=me&&(me.role==='admin'||me.role==='superadmin');
 
@@ -137,6 +138,7 @@ function App(){
     try{
       const e=await api('listEmployees',{token:tk}); if(e.ok)setEmployees(e.employees);
       const tr=await api('listTraining',{token:tk}); if(tr.ok)setTraining(tr.training);
+      const c=await api('listCourses',{token:tk}); if(c.ok)setCourses(c.courses);
       if(me.role==='admin'||me.role==='superadmin'){ const u=await api('listUsers',{token:tk}); if(u.ok)setUsers(u.users); }
     }catch(e){}
   };
@@ -175,7 +177,7 @@ function App(){
       </nav>
       <main className="max-w-6xl mx-auto px-4 py-8">
         {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} onDelete={loadData} me={me} />}
-        {tab==='give' && <GiveTraining t={t} employees={employees} onIssued={loadData} />}
+        {tab==='give' && <GiveTraining t={t} employees={employees} courses={courses} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
         {tab==='employees' && isAdmin && <Employees t={t} employees={employees} reload={loadData} />}
         {tab==='people' && isAdmin && <People t={t} me={me} users={users} reload={loadData} />}
       </main>
@@ -216,8 +218,13 @@ function Login({ t, onLogin }){
 }
 
 /* ---------------- Give training ---------------- */
-function GiveTraining({ t, employees, onIssued }){
-  const [sel,setSel]=useState({}); const [type,setType]=useState(CONFIG.TRAINING_TYPES[0]);
+function GiveTraining({ t, employees, courses, isAdmin, onIssued, reloadCourses }){
+  const typeList=(courses&&courses.length)?courses:CONFIG.TRAINING_TYPES;
+  const [sel,setSel]=useState({}); const [type,setType]=useState('');
+  const [newCourse,setNewCourse]=useState(''); const [showCourses,setShowCourses]=useState(false);
+  useEffect(()=>{ if((!type||typeList.indexOf(type)<0)&&typeList.length) setType(typeList[0]); },[courses]);
+  const addCourse=async()=>{ const n=newCourse.trim(); if(!n)return; const tk=store.get(SESS).token; const r=await api('addCourse',{token:tk,name:n}); if(r.ok){ setNewCourse(''); reloadCourses(); setType(n); } else alert(r.error==='exists'?'That course already exists.':'Could not add course.'); };
+  const delCourse=async(n)=>{ if(!window.confirm('Remove course "'+n+'"?'))return; const tk=store.get(SESS).token; await api('deleteCourse',{token:tk,name:n}); reloadCourses(); };
   const [date,setDate]=useState(todayISO()); const [q,setQ]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(null);
   const active=employees.filter(e=>e.active!==false);
@@ -248,14 +255,29 @@ function GiveTraining({ t, employees, onIssued }){
 
   return (
     <div className="space-y-6 fade">
-      <h1 className="text-2xl font-bold text-slate-900">Give training</h1>
+      <div className="flex items-center justify-between">
+        <h1 className="text-2xl font-bold text-slate-900">Give training</h1>
+        {isAdmin && <button onClick={()=>setShowCourses(v=>!v)} className="text-sm font-semibold" style={{color:t.primary}}>{showCourses?'Done':'Manage courses'}</button>}
+      </div>
       <p className="text-slate-600 -mt-4 text-sm">Pick the training, tick the people who did it, and issue. A certificate is generated for each one and emailed to them and the office.</p>
+      {isAdmin && showCourses && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
+          <h2 className="font-bold text-slate-800">Training courses</h2>
+          <div className="flex gap-2">
+            <input value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course name, e.g. Fire Safety" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+            <button onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 rounded-lg text-sm">Add</button>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {typeList.map(c=><span key={c} className="flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700">{c}<button onClick={()=>delCourse(c)} className="text-slate-400 hover:text-red-500 px-1">&times;</button></span>)}
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training type</label>
             <select value={type} onChange={e=>setType(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">
-              {CONFIG.TRAINING_TYPES.map(x=><option key={x} value={x}>{x}</option>)}
+              {typeList.map(x=><option key={x} value={x}>{x}</option>)}
             </select></div>
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training date</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
