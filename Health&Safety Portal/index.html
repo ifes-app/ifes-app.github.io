@@ -29,14 +29,12 @@ window.addEventListener('error', function(e){
 /* eslint-disable */
 const { useState, useEffect } = React;
 
-/* ===== CONFIG 2 ===== */
+/* ===== CONFIG ===== */
 const CONFIG = {
   BACKEND_PREFIX: "https://script.google.com/macros/s/AKfycbz51Kg6kdeyAMvQ3d79NlVlqRGyTl-9jbWrDMYLzv3G7Je3CemcG0WGqX",
   LOGO_URL: "https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp",
   CERT_FILE: "Cert.txt",
-  /* Training fallback if sheet is empty. Added default 36 month duration. */
   TRAINING_TYPES: [ {name: "Manual Handling", duration: 36} ],
-  /* Fallback instructor if a trainer has no qualification saved. */
   INSTRUCTOR: { name: "Cormac Farrell", title: "Manual Handling Instructor", qual: "QQI Level 6" }
 };
 const THEME = { primary:'#005C9C', secondary:'#0077C8', lightBg:'#F1F6FA' };
@@ -51,13 +49,11 @@ let BACKEND_CODE=(function(){ try{return JSON.parse(localStorage.getItem('backen
 const backendReady=()=>BACKEND_CODE.length>0;
 const backendUrl=()=>CONFIG.BACKEND_PREFIX+BACKEND_CODE+"/exec";
 
-/* Safely build YYYY-MM-DD from local timezone to avoid the UTC rollover bug */
 const todayISO = () => {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
-/* Now supports dynamic Expiry durations (in months) */
 const addMonths = (iso, m) => {
   const d = new Date(iso);
   if (isNaN(d)) return '';
@@ -65,7 +61,6 @@ const addMonths = (iso, m) => {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
-/* Change date format here if needed (e.g. month:'numeric') */
 const fmtUK=(iso)=>{ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); };
 
 const daysUntil=(iso)=>{ if(!iso)return null; return Math.ceil((new Date(iso)-new Date())/86400000); };
@@ -89,7 +84,6 @@ async function api(action,payload){
   try{ return await res.json(); }catch(e){ throw {code:'bad_endpoint'}; }
 }
 
-/* ---- certificate loading + filling (cert lives in Cert.txt, not in this file) ---- */
 const CERT_CACHE={};
 async function loadCert(file){
   if(CERT_CACHE[file]) return CERT_CACHE[file];
@@ -110,9 +104,9 @@ function buildCertBytes(b64,data){
     trainingDate:fmtUK(data.trainingDate),
     issueDate:fmtUK(data.issueDate),
     expiryDate:fmtUK(data.expiryDate),
-    instructorName:data.instructorName,
-    instructorTitle:data.instructorTitle,
-    instructorQual:data.instructorQual
+    instructorName:data.instructorName||CONFIG.INSTRUCTOR.name,
+    instructorTitle:data.instructorTitle||CONFIG.INSTRUCTOR.title,
+    instructorQual:data.instructorQual||'' // Defaults to blank if none provided
   });
   return doc.getZip().generate({type:'uint8array'});
 }
@@ -120,7 +114,6 @@ function uint8ToBase64(u8){ let s=''; const chunk=0x8000; for(let i=0;i<u8.lengt
 function downloadBlob(blob,filename){ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); }
 const DOCX_MIME='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
-/* ---- icons ---- */
 const I={
   cal:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>,
   grid:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
@@ -173,7 +166,6 @@ function App(){
     }catch(e){ setLoadErr('Could not reach the server.'); }
   };
   
-  // Safe dependency for effect
   const meToken = me ? me.token : null;
   useEffect(()=>{ if(me){ setTab(isAdmin?'dashboard':'give'); loadData(); } },[meToken]);
 
@@ -213,7 +205,7 @@ function App(){
         {loadErr && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{loadErr}</div>}
         {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} onDelete={loadData} me={me} />}
         {tab==='give' && <GiveTraining t={t} me={me} employees={employees} courses={courses} schedule={schedule} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
-        {tab==='schedule' && isAdmin && <Schedule t={t} employees={employees} courses={courses} schedule={schedule} reload={loadData} />}
+        {tab==='schedule' && isAdmin && <Schedule t={t} courses={courses} schedule={schedule} users={users} reload={loadData} />}
         {tab==='employees' && isAdmin && <Employees t={t} employees={employees} reload={loadData} />}
         {tab==='people' && isAdmin && <People t={t} me={me} users={users} reload={loadData} />}
       </main>
@@ -267,19 +259,16 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   const typeList=(courses&&courses.length)?courses:CONFIG.TRAINING_TYPES;
 
   const [sel,setSel]=useState({});
-  const [typeId,setTypeId]=useState('');
+  const [type,setType]=useState('');
   const [newCourse,setNewCourse]=useState('');
   const [newCourseDur,setNewCourseDur]=useState(12);
   const [showCourses,setShowCourses]=useState(false);
   const [courseBusy,setCourseBusy]=useState(false);
   const [courseMsg,setCourseMsg]=useState(null);
 
-  // Set default type if not selected
   useEffect(()=>{
-    if((!typeId || !typeList.find(x=>x.id===typeId)) && typeList.length) {
-      setTypeId(typeList[0].id);
-    }
-  }, [courses, typeId]);
+    if((!type || !typeList.find(x=>x.name===type)) && typeList.length) { setType(typeList[0].name); }
+  }, [courses, type]);
 
   const addCourse=async()=>{
     const n=newCourse.trim();
@@ -288,26 +277,25 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
     const tk=store.get(SESS).token;
     const r=await api('addCourse',{token:tk, name:n, duration:newCourseDur});
     setCourseBusy(false);
-    if(r.ok){ setNewCourse(''); setNewCourseDur(12); reloadCourses(); setTypeId(r.id); setCourseMsg({bad:false,text:'Course added.'}); }
+    if(r.ok){ setNewCourse(''); setNewCourseDur(12); reloadCourses(); setType(n); setCourseMsg({bad:false,text:'Course added.'}); }
     else setCourseMsg({bad:true,text:errText(r)});
   };
-  const delCourse=async(id, name)=>{
+  const delCourse=async(name)=>{
     if(!window.confirm('Remove course "'+name+'"?'))return;
     setCourseBusy(true); setCourseMsg({bad:false,text:'Deleting '+name+'...'});
     const tk=store.get(SESS).token;
-    const r=await api('deleteCourse',{token:tk,id:id});
+    const r=await api('deleteCourse',{token:tk,name:name});
     setCourseBusy(false);
     if(r.ok){ reloadCourses(); setCourseMsg({bad:false,text:'Course removed.'}); }
     else setCourseMsg({bad:true,text:errText(r)});
   };
 
   const runSession=(sess)=>{ 
-    const matchCourse = courses.find(c => c.name === sess.course);
-    if(matchCourse) setTypeId(matchCourse.id);
+    setType(sess.course); 
     setDate(sess.date); 
-    const n={}; sess.employees.forEach(e=>{ const match=employees.find(x=>x.name===e.name); if(match)n[match.id]=true; }); 
-    setSel(n); setSchedId(sess.id); 
-    setMsg({bad:false,text:'Session loaded: '+sess.course+' on '+fmtUK(sess.date)+'. Check the ticks and press Issue.'}); 
+    setSchedId(sess.id); 
+    setMsg({bad:false,text:'Session loaded: '+sess.course+' at '+sess.site+' on '+fmtUK(sess.date)+'. Tick the people who attended and press Issue.'}); 
+    window.scrollTo({ top: document.getElementById('issue-panel').offsetTop - 20, behavior: 'smooth' });
   };
 
   const [date,setDate]=useState(todayISO()); const [q,setQ]=useState('');
@@ -320,30 +308,26 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
 
   const issue=async()=>{
     if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
-    const courseObj = typeList.find(c => c.id === typeId) || typeList[0];
-    const typeName = courseObj.name || 'Training';
-    const durationMonths = courseObj.duration || 36;
-
-    if(!window.confirm('Issue '+typeName+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
+    if(!window.confirm('Issue '+type+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
     setBusy(true); setMsg({bad:false,text:'Generating and emailing certificates...'});
     try{
       const b64=await loadCert(CONFIG.CERT_FILE);
       const tk=store.get(SESS).token; let emailedAll=true; let pdfSuccess=true;
 
-      // Logic: Use logged in user's name if available.
-      const instructorName = (me && me.name) ? me.name : CONFIG.INSTRUCTOR.name;
-      // Dynamically create title based on the course name
-      const instructorTitle = typeName + ' Instructor';
-      // If a specific person is logged in, use their exact qualification (even if empty). Otherwise use fallback.
-      const instructorQual = (me && me.name) ? (me.qual || '') : CONFIG.INSTRUCTOR.qual;
+      const courseObj = courses.find(c => c.name === type);
+      const durationMonths = courseObj ? (parseInt(courseObj.duration) || 36) : 36;
+
+      const instructorName = (me && me.name) || CONFIG.INSTRUCTOR.name;
+      const instructorTitle = type + ' Instructor';
+      const instructorQual = (me && me.qual) || '';
 
       for(const e of chosen){
         const issueDate=todayISO();
         const expiryDate=addMonths(date, durationMonths);
 
-        const bytes=buildCertBytes(b64,{name:e.name,trainingType:typeName,trainingDate:date,issueDate,expiryDate,instructorName,instructorTitle,instructorQual});
+        const bytes=buildCertBytes(b64,{name:e.name,trainingType:type,trainingDate:date,issueDate,expiryDate,instructorName,instructorTitle,instructorQual});
 
-        const r=await api('recordTraining',{token:tk,employee:e.name,email:e.email,trainingType:typeName,trainingDate:date,issueDate,expiryDate,certBase64:uint8ToBase64(bytes)});
+        const r=await api('recordTraining',{token:tk,employee:e.name,email:e.email,trainingType:type,trainingDate:date,issueDate,expiryDate,certBase64:uint8ToBase64(bytes)});
         if(!(r&&r.ok&&r.emailed)) emailedAll=false;
         if(r && r.ok && r.emailedPdf===false) pdfSuccess = false;
       }
@@ -359,13 +343,34 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
     finally{ setBusy(false); }
   };
 
+  // Filter schedule just for the logged-in trainer
+  const mySchedule = (schedule||[]).filter(s=>s.status!=='Done' && s.trainer===me.username).sort((a,b)=>new Date(a.date)-new Date(b.date));
+
   return (
     <div className="space-y-6 fade">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-slate-900">Give training</h1>
         {isAdmin && <button onClick={()=>setShowCourses(v=>!v)} className="text-sm font-semibold" style={{color:t.primary}}>{showCourses?'Done':'Manage courses'}</button>}
       </div>
-      <p className="text-slate-600 -mt-4 text-sm">Pick the training, tick the people who did it, and issue. A certificate is generated for each one and emailed to them, you, and the office.</p>
+      
+      {/* Trainer's Personal Agenda */}
+      {mySchedule.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3 shadow-sm">
+          <h2 className="font-bold text-slate-800 flex items-center gap-2"><I.cal size={18} style={{color:t.primary}}/> My Upcoming Schedule</h2>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {mySchedule.map(s=>(
+               <div key={s.id} className="border border-slate-200 rounded-lg p-3.5 flex flex-col justify-between gap-3 bg-slate-50 hover:bg-slate-100 transition">
+                 <div>
+                   <p className="font-bold text-slate-800 text-base">{s.site}</p>
+                   <p className="text-sm font-medium text-slate-600 mt-0.5">{s.course}</p>
+                   <p className="text-xs text-slate-500 mt-1.5 flex items-center gap-1.5"><I.cal size={13}/> {fmtUK(s.date)}</p>
+                 </div>
+                 <button onClick={()=>runSession(s)} style={{backgroundColor:t.primary}} className="text-white text-xs font-semibold px-3 py-2 rounded-lg w-full hover:brightness-110 shadow-sm transition">Run session</button>
+               </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {isAdmin && showCourses && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
@@ -373,47 +378,36 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
           <div className="flex gap-2 items-center">
             <input disabled={courseBusy} value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course (e.g. Fire Safety)" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
             <input disabled={courseBusy} type="number" min="1" value={newCourseDur} onChange={e=>setNewCourseDur(e.target.value)} placeholder="Months valid" title="Duration in months" className="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-            <span className="text-sm text-slate-500 font-medium">months</span>
+            <span className="text-sm text-slate-500 font-medium hidden sm:inline">months</span>
             <button disabled={courseBusy} onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm ml-2 disabled:opacity-60">{courseBusy?'...':'Add'}</button>
           </div>
           {courseMsg && <p className={`text-sm font-medium ${courseMsg.bad?'text-red-600':'text-emerald-600'}`}>{courseMsg.text}</p>}
           <div className="flex flex-wrap gap-2 pt-2">
-            {typeList.map(c=><span key={c.id} className={`flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 opacity-90 ${courseBusy?'pointer-events-none':''}`}>{c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span><button disabled={courseBusy} onClick={()=>delCourse(c.id, c.name)} className="text-slate-400 hover:text-red-500 px-1 disabled:opacity-50">&times;</button></span>)}
+            {typeList.map(c=><span key={c.name} className={`flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 opacity-90 ${courseBusy?'pointer-events-none':''}`}>{c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span><button disabled={courseBusy} onClick={()=>delCourse(c.name)} className="text-slate-400 hover:text-red-500 px-1 disabled:opacity-50">&times;</button></span>)}
           </div>
         </div>
       )}
 
-      {(schedule||[]).filter(s=>s.status!=='Done').length>0 && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-2">
-          <h2 className="font-bold text-slate-800">Planned sessions</h2>
-          {(schedule||[]).filter(s=>s.status!=='Done').map(s=>(
-            <div key={s.id} className="flex items-center justify-between border border-slate-200 rounded-lg px-4 py-2.5">
-              <div><p className="font-medium text-slate-800 text-sm">{s.course} <span className="text-slate-400">- {fmtUK(s.date)}</span></p><p className="text-xs text-slate-400">{s.employees.length} people: {s.employees.map(e=>e.name).join(', ')}</p></div>
-              <button onClick={()=>runSession(s)} style={{backgroundColor:t.primary}} className="text-white text-xs font-semibold px-3 py-1.5 rounded-lg">Run session</button>
-            </div>
-          ))}
-        </div>
-      )}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div id="issue-panel" className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training type</label>
-            <select value={typeId} onChange={e=>setTypeId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">
-              {typeList.map(x=><option key={x.id} value={x.id}>{x.name} ({x.duration} months)</option>)}
+            <select value={type} onChange={e=>setType(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">
+              {typeList.map(x=><option key={x.name} value={x.name}>{x.name} ({x.duration} months)</option>)}
             </select></div>
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training date</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
-          <div className="flex items-end"><button onClick={issue} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 disabled:opacity-60">{busy?'Working...':`Issue ${chosen.length||''} cert${chosen.length===1?'':'s'}`}</button></div>
+          <div className="flex items-end"><button onClick={issue} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Working...':`Issue ${chosen.length||''} cert${chosen.length===1?'':'s'}`}</button></div>
         </div>
         <div className="p-4 flex items-center gap-3 border-b border-slate-100">
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search people" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-          <button onClick={()=>allShown(true)} className="text-sm font-semibold" style={{color:t.primary}}>Select all</button>
-          <button onClick={()=>allShown(false)} className="text-sm text-slate-500">Clear</button>
+          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search people" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
+          <button onClick={()=>allShown(true)} className="text-sm font-semibold hover:opacity-80 transition" style={{color:t.primary}}>Select all</button>
+          <button onClick={()=>allShown(false)} className="text-sm text-slate-500 hover:text-slate-800 transition">Clear</button>
         </div>
         {msg && <p className={`px-5 pt-3 text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
         <ul className="divide-y divide-slate-100 max-h-96 overflow-auto">
           {active.length===0 && <li className="p-6 text-slate-400 italic">No employees yet. Add them on the Employees tab.</li>}
           {list.map(e=>(
-            <li key={e.id} className="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50" onClick={()=>toggle(e.id)}>
+            <li key={e.id} className="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50 transition" onClick={()=>toggle(e.id)}>
               <input type="checkbox" checked={!!sel[e.id]} readOnly className="w-4 h-4 pointer-events-none" />
               <div><p className="font-medium text-slate-800 text-sm">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div>
             </li>
@@ -425,24 +419,33 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
 }
 
 /* ---------------- Schedule (admin plans a session) ---------------- */
-function Schedule({ t, employees, courses, schedule, reload }){
-  const [course,setCourse]=useState(''); const [date,setDate]=useState(todayISO());
-  const [sel,setSel]=useState({}); const [msg,setMsg]=useState(null); const [busy,setBusy]=useState(false);
+function Schedule({ t, courses, schedule, users, reload }){
+  const [course,setCourse]=useState(''); 
+  const [date,setDate]=useState(todayISO());
+  const [site,setSite]=useState('');
+  const [trainer,setTrainer]=useState('');
+  const [msg,setMsg]=useState(null); 
+  const [busy,setBusy]=useState(false);
   const [delBusy,setDelBusy]=useState(null);
-  useEffect(()=>{ if(!course&&courses.length)setCourse(courses[0].name); },[courses]);
-  const active=employees.filter(e=>e.active!==false);
-  const chosen=active.filter(e=>sel[e.id]);
-  const toggle=(id)=>setSel(s=>Object.assign({},s,{[id]:!s[id]}));
+
+  useEffect(()=>{ 
+    if(!course && courses.length) setCourse(courses[0].name); 
+    if(!trainer && users.length) setTrainer(users[0].username);
+  },[courses, users]);
+
   const save=async()=>{
+    if(!site.trim()){ setMsg({bad:true,text:'Enter a site location.'}); return; }
     if(!course){ setMsg({bad:true,text:'Pick a course.'}); return; }
-    if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
+    if(!trainer){ setMsg({bad:true,text:'Pick a trainer.'}); return; }
+    
     setBusy(true); setMsg({bad:false,text:'Saving session...'});
     const tk=store.get(SESS).token;
-    const r=await api('addSchedule',{token:tk,course,date,employees:chosen.map(e=>({name:e.name,email:e.email}))});
+    const r=await api('addSchedule',{token:tk,course,date,site:site.trim(),trainer});
     setBusy(false);
-    if(r.ok){ setSel({}); setMsg({bad:false,text:'Session scheduled. The trainer sees it on Give training.'}); reload(); }
+    if(r.ok){ setSite(''); setMsg({bad:false,text:'Session scheduled. It will appear on the trainer\'s dashboard.'}); reload(); }
     else setMsg({bad:true,text:errText(r)});
   };
+
   const del=async(s)=>{ 
     if(!window.confirm('Delete this planned session?'))return; 
     setDelBusy(s.id);
@@ -450,39 +453,53 @@ function Schedule({ t, employees, courses, schedule, reload }){
     await api('deleteSchedule',{token:tk,id:s.id}); 
     setDelBusy(null); reload(); 
   };
-  const planned=(schedule||[]).filter(s=>s.status!=='Done');
+  
+  const planned=(schedule||[]).filter(s=>s.status!=='Done').sort((a,b)=>new Date(a.date)-new Date(b.date));
+  
   return (
     <div className="space-y-6 fade">
       <h1 className="text-2xl font-bold text-slate-900">Schedule a session</h1>
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
+      <p className="text-slate-600 -mt-4 text-sm">Assign a trainer to visit a site. The trainer will log in, see their schedule, and select the attendees on the day.</p>
+      
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="p-5 grid sm:grid-cols-2 gap-4 border-b border-slate-100 bg-slate-50/50">
+          <div><label className="block text-xs font-semibold text-slate-600 mb-1">Site / Location</label>
+            <input type="text" value={site} onChange={e=>setSite(e.target.value)} placeholder="e.g. Building A" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+          
+          <div><label className="block text-xs font-semibold text-slate-600 mb-1">Trainer</label>
+            <select value={trainer} onChange={e=>setTrainer(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}>
+              {users.map(u=><option key={u.username} value={u.username}>{u.name}</option>)}
+            </select></div>
+
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Course</label>
-            <select value={course} onChange={e=>setCourse(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">{courses.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
+            <select value={course} onChange={e=>setCourse(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}>
+              {courses.map(c=><option key={c.name} value={c.name}>{c.name}</option>)}
+            </select></div>
+
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
-            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
-          <div className="flex items-end"><button onClick={save} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg disabled:opacity-60">{busy?'Saving...':`Schedule ${chosen.length||''}`}</button></div>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+          
+          <div className="sm:col-span-2 pt-2"><button onClick={save} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Saving...':'Schedule session'}</button></div>
         </div>
-        {msg && <p className={`px-5 pt-3 text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
-        <ul className="divide-y divide-slate-100 max-h-80 overflow-auto">
-          {active.length===0 && <li className="p-6 text-slate-400 italic">No employees yet. Add them on the Employees tab.</li>}
-          {active.map(e=>(
-            <li key={e.id} className="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50" onClick={()=>toggle(e.id)}>
-              <input type="checkbox" checked={!!sel[e.id]} readOnly className="w-4 h-4 pointer-events-none" />
-              <div><p className="font-medium text-slate-800 text-sm">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div>
-            </li>
-          ))}
-        </ul>
+        {msg && <p className={`px-5 py-4 text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
       </div>
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">Planned sessions ({planned.length})</h2></div>
+
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All planned sessions ({planned.length})</h2></div>
         <ul className="divide-y divide-slate-100">
           {planned.length===0 && <li className="p-6 text-slate-400 italic">Nothing planned.</li>}
-          {planned.map(s=>(
-            <li key={s.id} className={`px-5 py-3 flex items-center justify-between ${delBusy===s.id?'opacity-50 pointer-events-none':''}`}>
-              <div><p className="font-medium text-slate-800">{s.course} <span className="text-slate-400 text-sm">- {fmtUK(s.date)}</span></p><p className="text-xs text-slate-400">{s.employees.map(e=>e.name).join(', ')}</p></div>
-              <button disabled={delBusy===s.id} onClick={()=>del(s)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>
-            </li>
-          ))}
+          {planned.map(s=>{
+            const trainerName = users.find(u=>u.username===s.trainer)?.name || s.trainer;
+            return (
+              <li key={s.id} className={`px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 transition ${delBusy===s.id?'opacity-50 pointer-events-none':''}`}>
+                <div>
+                  <p className="font-bold text-slate-800">{s.site} <span className="text-slate-500 font-medium text-sm ml-2">({s.course})</span></p>
+                  <p className="text-xs font-medium text-slate-500 mt-0.5"><span className="text-slate-400">{fmtUK(s.date)}</span> • Trainer: {trainerName}</p>
+                </div>
+                <button disabled={delBusy===s.id} onClick={()=>del(s)} className="text-slate-300 hover:text-red-500 transition p-2"><I.trash size={18}/></button>
+              </li>
+            );
+          })}
         </ul>
       </div>
     </div>
@@ -522,22 +539,22 @@ function Dashboard({ t, training, onDelete, me }){
     <div className="space-y-6 fade">
       <h1 className="text-2xl font-bold text-slate-900">Certificate dashboard</h1>
       <div className="grid grid-cols-3 gap-4">
-        {cards.map(c=><div key={c[0]} className="bg-white rounded-xl border border-slate-200 p-5"><p className={`text-3xl font-extrabold ${c[2]}`}>{count(c[0])}</p><p className="text-sm text-slate-500 mt-1">{c[1]}</p></div>)}
+        {cards.map(c=><div key={c[0]} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm"><p className={`text-3xl font-extrabold ${c[2]}`}>{count(c[0])}</p><p className="text-sm font-medium text-slate-500 mt-1">{c[1]}</p></div>)}
       </div>
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3"><h2 className="font-bold text-slate-800">All certificates ({rows.length})</h2><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Filter by name" className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm" /></div>
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+        <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3"><h2 className="font-bold text-slate-800">All certificates ({rows.length})</h2><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Filter by name" className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
         <div className="overflow-x-auto"><table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500 text-left"><tr><th className="px-4 py-2 font-semibold">Employee</th><th className="px-4 py-2 font-semibold">Type</th><th className="px-4 py-2 font-semibold">Trained</th><th className="px-4 py-2 font-semibold">Expires</th><th className="px-4 py-2 font-semibold">Status</th><th className="px-4 py-2"></th></tr></thead>
+          <thead className="bg-slate-50 text-slate-500 text-left border-b border-slate-200"><tr><th className="px-4 py-3 font-semibold">Employee</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Trained</th><th className="px-4 py-3 font-semibold">Expires</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3"></th></tr></thead>
           <tbody>
-            {shown.length===0 && <tr><td colSpan="6" className="px-4 py-6 text-center text-slate-400 italic">No certificates yet.</td></tr>}
+            {shown.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400 italic">No certificates yet.</td></tr>}
             {shown.map(r=>(
-              <tr key={r.id} className={`border-t border-slate-100 ${delBusy===r.id?'opacity-50 pointer-events-none':''}`}>
-                <td className="px-4 py-2.5 font-medium text-slate-800">{r.employee}</td>
-                <td className="px-4 py-2.5 text-slate-600">{r.trainingType}</td>
-                <td className="px-4 py-2.5 text-slate-600">{fmtUK(r.trainingDate)||'-'}</td>
-                <td className="px-4 py-2.5 text-slate-600">{fmtUK(r.expiryDate)||'-'}</td>
-                <td className="px-4 py-2.5"><Badge tone={r.st.tone}>{r.st.label}</Badge></td>
-                <td className="px-4 py-2.5 text-right"><div className="flex items-center justify-end gap-2"><button onClick={()=>redl(r)} title="Download certificate" className="text-slate-400 hover:text-slate-700"><I.down size={16}/></button>{me.role==='admin'||me.role==='superadmin' ? <button disabled={delBusy===r.id} onClick={()=>del(r)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button> : null}</div></td>
+              <tr key={r.id} className={`border-t border-slate-100 hover:bg-slate-50 transition ${delBusy===r.id?'opacity-50 pointer-events-none':''}`}>
+                <td className="px-4 py-3 font-bold text-slate-800">{r.employee}</td>
+                <td className="px-4 py-3 font-medium text-slate-600">{r.trainingType}</td>
+                <td className="px-4 py-3 text-slate-500">{fmtUK(r.trainingDate)||'-'}</td>
+                <td className="px-4 py-3 text-slate-500">{fmtUK(r.expiryDate)||'-'}</td>
+                <td className="px-4 py-3"><Badge tone={r.st.tone}>{r.st.label}</Badge></td>
+                <td className="px-4 py-3 text-right"><div className="flex items-center justify-end gap-3"><button onClick={()=>redl(r)} title="Download certificate" className="text-slate-400 hover:text-slate-700 transition"><I.down size={18}/></button>{me.role==='admin'||me.role==='superadmin' ? <button disabled={delBusy===r.id} onClick={()=>del(r)} className="text-slate-300 hover:text-red-500 transition"><I.trash size={18}/></button> : null}</div></td>
               </tr>
             ))}
           </tbody>
@@ -578,29 +595,29 @@ function Employees({ t, employees, reload }){
       <h1 className="text-2xl font-bold text-slate-900">Employees</h1>
       <p className="text-slate-600 -mt-4 text-sm">The people who receive training. They do not log in; their certificate is emailed to the address here.</p>
       <div className="grid lg:grid-cols-2 gap-6 items-start">
-        <form onSubmit={add} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.plus size={18}/> Add one</div>
+        <form onSubmit={add} className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+          <div style={{backgroundColor:t.primary}} className="px-5 py-3.5 text-white font-bold flex items-center gap-2"><I.plus size={18}/> Add one</div>
           <div className="p-5 space-y-3">
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input disabled={busy} value={name} onChange={e=>setName(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email (cert goes here)</label><input disabled={busy} type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input disabled={busy} value={name} onChange={e=>setName(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email (cert goes here)</label><input disabled={busy} type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
             {msg && <p className={`text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
-            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 disabled:opacity-60">{busy?'Working...':'Add employee'}</button>
+            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Working...':'Add employee'}</button>
           </div>
         </form>
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.up size={18}/> Bulk upload (Excel)</div>
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+          <div style={{backgroundColor:t.primary}} className="px-5 py-3.5 text-white font-bold flex items-center gap-2"><I.up size={18}/> Bulk upload (Excel)</div>
           <div className="p-5 space-y-3 text-sm text-slate-600">
             <p>Spreadsheet with columns: <b>name, email</b>. One row per person.</p>
-            <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-lg py-6 cursor-pointer hover:border-slate-400" style={{color:t.primary}}><I.up size={18}/> <span className="font-semibold">Choose .xlsx or .csv</span><input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" /></label>
+            <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-lg py-8 cursor-pointer hover:border-slate-400 bg-slate-50 hover:bg-slate-100 transition" style={{color:t.primary}}><I.up size={20}/> <span className="font-semibold text-base">Choose .xlsx or .csv</span><input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" /></label>
             {bulkMsg && <p className={`font-medium ${bulkMsg.bad?'text-red-600':'text-emerald-600'}`}>{bulkMsg.text}</p>}
           </div>
         </div>
       </div>
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All employees ({employees.length})</h2></div>
         <ul className="divide-y divide-slate-100">
           {employees.length===0 && <li className="p-6 text-slate-400 italic">None yet.</li>}
-          {employees.map(e=><li key={e.id} className={`px-5 py-3 flex items-center justify-between ${delBusy===e.id?'opacity-50 pointer-events-none':''}`}><div><p className="font-medium text-slate-800">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div><button disabled={delBusy===e.id} onClick={()=>del(e)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button></li>)}
+          {employees.map(e=><li key={e.id} className={`px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 transition ${delBusy===e.id?'opacity-50 pointer-events-none':''}`}><div><p className="font-bold text-slate-800">{e.name}</p><p className="text-xs font-medium text-slate-500 mt-0.5">{e.email||'no email'}</p></div><button disabled={delBusy===e.id} onClick={()=>del(e)} className="text-slate-300 hover:text-red-500 transition p-2"><I.trash size={18}/></button></li>)}
         </ul>
       </div>
     </div>
@@ -642,33 +659,33 @@ function People({ t, me, users, reload }){
       <h1 className="text-2xl font-bold text-slate-900">Logins</h1>
       <p className="text-slate-600 -mt-4 text-sm">People who sign in: trainers who issue certificates, plus admins. The qualification appears on certificates they issue.</p>
       <div className="grid lg:grid-cols-2 gap-6 items-start">
-        <form onSubmit={add} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.plus size={18}/> Add a login</div>
+        <form onSubmit={add} className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+          <div style={{backgroundColor:t.primary}} className="px-5 py-3.5 text-white font-bold flex items-center gap-2"><I.plus size={18}/> Add a login</div>
           <div className="p-5 space-y-3">
-            <div className="grid sm:grid-cols-2 gap-3"><div><label className="block text-xs font-semibold text-slate-600 mb-1">Username</label><input disabled={busy} required value={f.username} onChange={e=>set('username',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div><div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input disabled={busy} value={f.name} onChange={e=>set('name',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div></div>
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email</label><input disabled={busy} type="email" value={f.email} onChange={e=>set('email',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Qualification (shows on certs they issue, e.g. QQI Level 6)</label><input disabled={busy} value={f.qual} onChange={e=>set('qual',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
+            <div className="grid sm:grid-cols-2 gap-3"><div><label className="block text-xs font-semibold text-slate-600 mb-1">Username</label><input disabled={busy} required value={f.username} onChange={e=>set('username',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div><div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input disabled={busy} value={f.name} onChange={e=>set('name',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email</label><input disabled={busy} type="email" value={f.email} onChange={e=>set('email',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Qualification (shows on certs they issue, e.g. QQI Level 6)</label><input disabled={busy} value={f.qual} onChange={e=>set('qual',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
             <div className="grid sm:grid-cols-2 gap-3">
-              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Access</label><select disabled={busy} value={f.role} onChange={e=>set('role',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"><option value="user">Trainer</option>{canMakeAdmin && <option value="admin">Admin</option>}</select></div>
-              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Password</label><div className="flex gap-2"><input disabled={busy} value={f.password} onChange={e=>set('password',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 font-mono text-sm" /><button disabled={busy} type="button" onClick={()=>set('password',genPassword())} className="text-xs text-slate-500 border border-slate-300 rounded-lg px-2">New</button></div></div>
+              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Access</label><select disabled={busy} value={f.role} onChange={e=>set('role',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}><option value="user">Trainer</option>{canMakeAdmin && <option value="admin">Admin</option>}</select></div>
+              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Password</label><div className="flex gap-2"><input disabled={busy} value={f.password} onChange={e=>set('password',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 font-mono text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /><button disabled={busy} type="button" onClick={()=>set('password',genPassword())} className="text-xs font-semibold text-slate-500 border border-slate-300 rounded-lg px-3 hover:bg-slate-50 transition">New</button></div></div>
             </div>
             {msg && <p className={`text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
-            {created && <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm"><p className="font-semibold text-emerald-800 flex items-center gap-1"><I.check size={15}/> Created. Give them:</p><p className="mt-1 font-mono text-slate-700">Username: {created.username}<br/>Password: {created.password}</p></div>}
-            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 disabled:opacity-60">{busy?'Working...':'Add login'}</button>
+            {created && <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm"><p className="font-bold text-emerald-800 flex items-center gap-1.5"><I.check size={16}/> Created. Give them:</p><p className="mt-1.5 font-mono text-slate-700">Username: {created.username}<br/>Password: {created.password}</p></div>}
+            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Working...':'Add login'}</button>
           </div>
         </form>
-        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
-          <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.up size={18}/> Bulk upload (Excel)</div>
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+          <div style={{backgroundColor:t.primary}} className="px-5 py-3.5 text-white font-bold flex items-center gap-2"><I.up size={18}/> Bulk upload (Excel)</div>
           <div className="p-5 space-y-3 text-sm text-slate-600"><p>Columns: <b>username, name, email, role, password, qualification</b>. Blank passwords are generated. {canMakeAdmin?'Role admin is allowed.':'All added as trainers.'}</p>
-            <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-lg py-6 cursor-pointer hover:border-slate-400" style={{color:t.primary}}><I.up size={18}/> <span className="font-semibold">Choose .xlsx or .csv</span><input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" /></label>
+            <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-lg py-8 cursor-pointer hover:border-slate-400 bg-slate-50 hover:bg-slate-100 transition" style={{color:t.primary}}><I.up size={20}/> <span className="font-semibold text-base">Choose .xlsx or .csv</span><input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" /></label>
             {bulkMsg && <p className={`font-medium ${bulkMsg.bad?'text-red-600':'text-emerald-600'}`}>{bulkMsg.text}</p>}
           </div>
         </div>
       </div>
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All logins ({users.length})</h2></div>
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 text-left"><tr><th className="px-4 py-2 font-semibold">Name</th><th className="px-4 py-2 font-semibold">Username</th><th className="px-4 py-2 font-semibold">Email</th><th className="px-4 py-2 font-semibold">Qualification</th><th className="px-4 py-2 font-semibold">Access</th><th className="px-4 py-2"></th></tr></thead>
-          <tbody>{users.map(u=><tr key={u.username} className={`border-t border-slate-100 ${delBusy===u.username?'opacity-50 pointer-events-none':''}`}><td className="px-4 py-2.5 font-medium text-slate-800">{u.name}</td><td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-2.5 text-slate-600">{u.email||'-'}</td><td className="px-4 py-2.5 text-slate-600">{u.qual||'-'}</td><td className="px-4 py-2.5"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-2.5 text-right">{u.username!==me.username && <button disabled={delBusy===u.username} onClick={()=>del(u)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>}</td></tr>)}</tbody>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 text-left border-b border-slate-200"><tr><th className="px-4 py-3 font-semibold">Name</th><th className="px-4 py-3 font-semibold">Username</th><th className="px-4 py-3 font-semibold">Email</th><th className="px-4 py-3 font-semibold">Qualification</th><th className="px-4 py-3 font-semibold">Access</th><th className="px-4 py-3"></th></tr></thead>
+          <tbody>{users.map(u=><tr key={u.username} className={`border-t border-slate-100 hover:bg-slate-50 transition ${delBusy===u.username?'opacity-50 pointer-events-none':''}`}><td className="px-4 py-3 font-bold text-slate-800">{u.name}</td><td className="px-4 py-3 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-3 text-slate-600">{u.email||'-'}</td><td className="px-4 py-3 text-slate-600">{u.qual||'-'}</td><td className="px-4 py-3"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-3 text-right">{u.username!==me.username && <button disabled={delBusy===u.username} onClick={()=>del(u)} className="text-slate-300 hover:text-red-500 transition p-1"><I.trash size={18}/></button>}</td></tr>)}</tbody>
         </table></div>
       </div>
     </div>
@@ -693,11 +710,11 @@ function ChangePassword({ t, onClose }){
       <form onClick={e=>e.stopPropagation()} onSubmit={submit} className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
         <div style={{backgroundColor:t.primary}} className="px-6 py-4 text-white font-bold flex items-center gap-2"><I.lock size={18}/> Change password</div>
         <div className="p-6 space-y-3">
-          <input disabled={busy} type="password" placeholder="Current password" value={cur} onChange={e=>setCur(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
-          <input disabled={busy} type="password" placeholder="New password" value={nw} onChange={e=>setNw(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
-          <input disabled={busy} type="password" placeholder="Confirm new password" value={cf} onChange={e=>setCf(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
+          <input disabled={busy} type="password" placeholder="Current password" value={cur} onChange={e=>setCur(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
+          <input disabled={busy} type="password" placeholder="New password" value={nw} onChange={e=>setNw(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
+          <input disabled={busy} type="password" placeholder="Confirm new password" value={cf} onChange={e=>setCf(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
           {msg && <p className={`text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
-          <div className="flex gap-2 pt-1"><button disabled={busy} type="button" onClick={onClose} className="flex-1 border border-slate-300 rounded-lg py-2.5 text-slate-600 font-semibold disabled:opacity-60">Close</button><button disabled={busy} style={{backgroundColor:t.secondary}} className="flex-1 text-white font-bold py-2.5 rounded-lg disabled:opacity-60">{busy?'Working...':'Save'}</button></div>
+          <div className="flex gap-3 pt-2"><button disabled={busy} type="button" onClick={onClose} className="flex-1 border border-slate-300 rounded-lg py-2.5 text-slate-600 font-semibold hover:bg-slate-50 transition disabled:opacity-60">Close</button><button disabled={busy} style={{backgroundColor:t.secondary}} className="flex-1 text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Working...':'Save'}</button></div>
         </div>
       </form>
     </div>
