@@ -34,7 +34,9 @@ const CONFIG = {
   BACKEND_PREFIX: "https://script.google.com/macros/s/AKfycbz51Kg6kdeyAMvQ3d79NlVlqRGyTl-9jbWrDMYLzv3G7Je3CemcG0WGqX",
   LOGO_URL: "https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp",
   CERT_FILE: "Cert.txt",
-  TRAINING_TYPES: [ "Manual Handling" ],
+  /* Training fallback if sheet is empty. Added default 36 month duration. */
+  TRAINING_TYPES: [ {name: "Manual Handling", duration: 36} ],
+  /* Fallback instructor if a trainer has no qualification saved. */
   INSTRUCTOR: { name: "Cormac Farrell", title: "Manual Handling Instructor", qual: "QQI Level 6" }
 };
 const THEME = { primary:'#005C9C', secondary:'#0077C8', lightBg:'#F1F6FA' };
@@ -49,25 +51,30 @@ let BACKEND_CODE=(function(){ try{return JSON.parse(localStorage.getItem('backen
 const backendReady=()=>BACKEND_CODE.length>0;
 const backendUrl=()=>CONFIG.BACKEND_PREFIX+BACKEND_CODE+"/exec";
 
+/* Safely build YYYY-MM-DD from local timezone to avoid the UTC rollover bug */
 const todayISO = () => {
   const d = new Date();
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
-const addYears = (iso, n) => {
+
+/* Now supports dynamic Expiry durations (in months) */
+const addMonths = (iso, m) => {
   const d = new Date(iso);
   if (isNaN(d)) return '';
-  d.setFullYear(d.getFullYear() + n);
+  d.setMonth(d.getMonth() + parseInt(m));
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 };
 
+/* Change date format here if needed (e.g. month:'numeric') */
 const fmtUK=(iso)=>{ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{day:'numeric',month:'short',year:'numeric'}); };
+
 const daysUntil=(iso)=>{ if(!iso)return null; return Math.ceil((new Date(iso)-new Date())/86400000); };
 const genPassword=()=>{ const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<8;i++)s+=c[Math.floor(Math.random()*c.length)]; return s; };
 const safeName=(n)=>String(n).replace(/[^A-Za-z0-9]+/g,'_');
 
 function errText(r){
   if(!r) return 'No reply from the server.';
-  if(r.error==='unknown_action') return 'Your backend is running an OLD version. In Apps Script: Deploy > Manage deployments > pencil > Version: New version > Deploy. (Details: '+r.message+')';
+  if(r.error==='unknown_action') return 'Your backend is running an OLD version. In Apps Script: Deploy > Manage deployments > pencil > Version: New version > Deploy.';
   if(r.error==='auth') return 'Your session expired. Log out and back in.';
   if(r.error==='forbidden') return 'Your login does not have permission for that.';
   if(r.error==='exists') return 'That one already exists.';
@@ -82,6 +89,7 @@ async function api(action,payload){
   try{ return await res.json(); }catch(e){ throw {code:'bad_endpoint'}; }
 }
 
+/* ---- certificate loading + filling (cert lives in Cert.txt, not in this file) ---- */
 const CERT_CACHE={};
 async function loadCert(file){
   if(CERT_CACHE[file]) return CERT_CACHE[file];
@@ -95,18 +103,24 @@ function buildCertBytes(b64,data){
   const zip=new PizZip(bytes);
   const Docx=(window.docxtemplater&&window.docxtemplater.default)?window.docxtemplater.default:window.docxtemplater;
   const doc=new Docx(zip,{paragraphLoop:true,linebreaks:true});
-  doc.render({ employeeName:data.name, trainingType:data.trainingType||'', trainingTypeLower:(data.trainingType||'').toLowerCase(), trainingDate:fmtUK(data.trainingDate), issueDate:fmtUK(data.issueDate), expiryDate:fmtUK(data.expiryDate), instructorName:CONFIG.INSTRUCTOR.name, instructorTitle:CONFIG.INSTRUCTOR.title, instructorQual:CONFIG.INSTRUCTOR.qual });
+  doc.render({
+    employeeName:data.name,
+    trainingType:data.trainingType||'',
+    trainingTypeLower:(data.trainingType||'').toLowerCase(),
+    trainingDate:fmtUK(data.trainingDate),
+    issueDate:fmtUK(data.issueDate),
+    expiryDate:fmtUK(data.expiryDate),
+    instructorName:data.instructorName||CONFIG.INSTRUCTOR.name,
+    instructorTitle:data.instructorTitle||CONFIG.INSTRUCTOR.title,
+    instructorQual:data.instructorQual||CONFIG.INSTRUCTOR.qual
+  });
   return doc.getZip().generate({type:'uint8array'});
 }
 function uint8ToBase64(u8){ let s=''; const chunk=0x8000; for(let i=0;i<u8.length;i+=chunk){ s+=String.fromCharCode.apply(null,u8.subarray(i,i+chunk)); } return btoa(s); }
 function downloadBlob(blob,filename){ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); }
 const DOCX_MIME='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-function downloadCerts(outputs){
-  if(outputs.length===1){ downloadBlob(new Blob([outputs[0].bytes],{type:DOCX_MIME}), outputs[0].name); return; }
-  const zip=new PizZip(); outputs.forEach(o=>zip.file(o.name,o.bytes));
-  downloadBlob(zip.generate({type:'blob'}),'Certificates.zip');
-}
 
+/* ---- icons ---- */
 const I={
   cal:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 10h18"/></svg>,
   grid:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>,
@@ -116,7 +130,7 @@ const I={
   plus:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>,
   up:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>,
   down:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>,
-  out:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>,
+  out:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>,
   trash:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>,
   lock:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>,
   check:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
@@ -150,13 +164,20 @@ function App(){
     const tk=me&&me.token; if(!tk)return;
     try{
       const r=await api('bootstrap',{token:tk});
-      if(r.ok){ setEmployees(r.employees||[]); setTraining(r.training||[]); setCourses(r.courses||[]); setSchedule(r.schedule||[]); if(r.users)setUsers(r.users); setLoadErr(''); }
+      if(r.ok){
+        setEmployees(r.employees||[]); setTraining(r.training||[]); setCourses(r.courses||[]); setSchedule(r.schedule||[]); if(r.users)setUsers(r.users);
+        if(r.qual!==undefined && r.qual!==me.qual){ const upd=Object.assign({},me,{qual:r.qual}); setMe(upd); store.set(SESS,{token:upd.token,me:{username:upd.username,name:upd.name,role:upd.role,qual:upd.qual}}); }
+        setLoadErr('');
+      }
       else setLoadErr(errText(r));
     }catch(e){ setLoadErr('Could not reach the server.'); }
   };
-  useEffect(()=>{ if(me){ setTab(isAdmin?'dashboard':'give'); loadData(); } },[me]);
+  
+  // Safe dependency for effect
+  const meToken = me ? me.token : null;
+  useEffect(()=>{ if(me){ setTab(isAdmin?'dashboard':'give'); loadData(); } },[meToken]);
 
-  const onLogin=(d)=>{ store.set(SESS,{token:d.token,me:{username:d.username,name:d.name,role:d.role}}); setMe(d); };
+  const onLogin=(d)=>{ store.set(SESS,{token:d.token,me:{username:d.username,name:d.name,role:d.role,qual:d.qual||''}}); setMe(d); };
   const logout=()=>{ store.del(SESS); setMe(null); setUsers([]); setEmployees([]); setTraining([]); };
 
   if(!ready) return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading...</div>;
@@ -191,7 +212,7 @@ function App(){
       <main className="max-w-6xl mx-auto px-4 py-8">
         {loadErr && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{loadErr}</div>}
         {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} onDelete={loadData} me={me} />}
-        {tab==='give' && <GiveTraining t={t} employees={employees} courses={courses} schedule={schedule} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
+        {tab==='give' && <GiveTraining t={t} me={me} employees={employees} courses={courses} schedule={schedule} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
         {tab==='schedule' && isAdmin && <Schedule t={t} employees={employees} courses={courses} schedule={schedule} reload={loadData} />}
         {tab==='employees' && isAdmin && <Employees t={t} employees={employees} reload={loadData} />}
         {tab==='people' && isAdmin && <People t={t} me={me} users={users} reload={loadData} />}
@@ -210,12 +231,12 @@ function Login({ t, onLogin }){
       if(CONFIG.BACKEND_PREFIX.indexOf('http')!==0){ setErr('Backend not set up in the app yet.'); setBusy(false); return; }
       if(needCode){ if(!code.trim()){ setErr('Enter your access code.'); setBusy(false); return; } BACKEND_CODE=code.trim(); }
       const r=await api('login',{username:username.trim(),password});
-      if(r.ok){ store.set('backend_code',BACKEND_CODE); onLogin({username:r.username,name:r.name,role:r.role,token:r.token}); }
+      if(r.ok){ store.set('backend_code',BACKEND_CODE); onLogin({username:r.username,name:r.name,role:r.role,qual:r.qual||'',token:r.token}); }
       else setErr('Wrong username or password.');
     }catch(e){ if(e&&e.code==='bad_endpoint'){ setErr('That access code does not match. Check the last 12 characters.'); if(needCode)BACKEND_CODE=''; } else setErr('Could not reach the server. Check your internet connection.'); }
     finally{ setBusy(false); }
   };
-  
+
   const hardReset = () => { localStorage.clear(); window.location.reload(); };
 
   return (
@@ -227,12 +248,12 @@ function Login({ t, onLogin }){
           <div><label className="block text-sm font-semibold text-slate-700 mb-1">Username</label><input autoFocus value={username} onChange={e=>setU(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
           <div><label className="block text-sm font-semibold text-slate-700 mb-1">Password</label><input type="password" value={password} onChange={e=>setP(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
           {err && <p className="text-sm text-red-600 font-medium">{err}</p>}
-          
+
           <div className="flex justify-between items-center">
             {!needCode && <button type="button" onClick={()=>setNeedCode(true)} className="text-xs text-slate-400 underline hover:text-slate-600">Change access code</button>}
             <button type="button" onClick={hardReset} className="text-xs text-red-400 underline hover:text-red-600">Reset App Connection</button>
           </div>
-          
+
           <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 transition disabled:opacity-60">{busy?'Signing in...':'Sign in'}</button>
         </div>
       </form>
@@ -241,15 +262,35 @@ function Login({ t, onLogin }){
 }
 
 /* ---------------- Give training ---------------- */
-function GiveTraining({ t, employees, courses, schedule, isAdmin, onIssued, reloadCourses }){
+function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, reloadCourses }){
   const [schedId,setSchedId]=useState(null);
   const typeList=(courses&&courses.length)?courses:CONFIG.TRAINING_TYPES;
-  const [sel,setSel]=useState({}); const [type,setType]=useState('');
-  const [newCourse,setNewCourse]=useState(''); const [showCourses,setShowCourses]=useState(false);
-  useEffect(()=>{ if((!type||typeList.indexOf(type)<0)&&typeList.length) setType(typeList[0]); },[courses]);
-  const addCourse=async()=>{ const n=newCourse.trim(); if(!n)return; const tk=store.get(SESS).token; const r=await api('addCourse',{token:tk,name:n}); if(r.ok){ setNewCourse(''); reloadCourses(); setType(n); } else alert(errText(r)); };
+
+  const [sel,setSel]=useState({});
+  const [type,setType]=useState('');
+  const [newCourse,setNewCourse]=useState('');
+  const [newCourseDur,setNewCourseDur]=useState(12);
+  const [showCourses,setShowCourses]=useState(false);
+
+  // Set default type if not selected
+  useEffect(()=>{
+    if((!type || !typeList.find(x=>x.name===type)) && typeList.length) {
+      setType(typeList[0].name);
+    }
+  }, [courses, type]);
+
+  const addCourse=async()=>{
+    const n=newCourse.trim();
+    if(!n)return;
+    const tk=store.get(SESS).token;
+    const r=await api('addCourse',{token:tk, name:n, duration:newCourseDur});
+    if(r.ok){ setNewCourse(''); setNewCourseDur(12); reloadCourses(); setType(n); }
+    else alert(errText(r));
+  };
   const delCourse=async(n)=>{ if(!window.confirm('Remove course "'+n+'"?'))return; const tk=store.get(SESS).token; await api('deleteCourse',{token:tk,name:n}); reloadCourses(); };
+
   const runSession=(sess)=>{ setType(sess.course); setDate(sess.date); const n={}; sess.employees.forEach(e=>{ const match=employees.find(x=>x.name===e.name); if(match)n[match.id]=true; }); setSel(n); setSchedId(sess.id); setMsg({bad:false,text:'Session loaded: '+sess.course+' on '+fmtUK(sess.date)+'. Check the ticks and press Issue.'}); };
+
   const [date,setDate]=useState(todayISO()); const [q,setQ]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(null);
   const active=employees.filter(e=>e.active!==false);
@@ -260,20 +301,32 @@ function GiveTraining({ t, employees, courses, schedule, isAdmin, onIssued, relo
 
   const issue=async()=>{
     if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
-    if(!window.confirm('Issue '+type+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThey will download to this device and be emailed to each employee and the office.')) return;
-    setBusy(true); setMsg({bad:false,text:'Generating certificates...'});
+    if(!window.confirm('Issue '+type+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
+    setBusy(true); setMsg({bad:false,text:'Generating and emailing certificates...'});
     try{
       const b64=await loadCert(CONFIG.CERT_FILE);
-      const tk=store.get(SESS).token; const outputs=[]; let emailedAll=true;
+      const tk=store.get(SESS).token; let emailedAll=true;
+
+      // Calculate Expiry Date dynamically based on selected course duration
+      const courseObj = courses.find(c => c.name === type);
+      const durationMonths = courseObj ? (parseInt(courseObj.duration) || 36) : 36;
+
+      // The logged-in trainer signs the certificate
+      const instructorName = (me && me.name) || CONFIG.INSTRUCTOR.name;
+      const instructorTitle = type + ' Instructor';
+      const instructorQual = (me && me.qual) || CONFIG.INSTRUCTOR.qual;
+
       for(const e of chosen){
-        const issueDate=todayISO(); const expiryDate=addYears(date,3);
-        const bytes=buildCertBytes(b64,{name:e.name,trainingType:type,trainingDate:date,issueDate,expiryDate});
-        outputs.push({name:safeName(type)+'_'+safeName(e.name)+'.docx',bytes});
+        const issueDate=todayISO();
+        const expiryDate=addMonths(date, durationMonths);
+
+        const bytes=buildCertBytes(b64,{name:e.name,trainingType:type,trainingDate:date,issueDate,expiryDate,instructorName,instructorTitle,instructorQual});
+
         const r=await api('recordTraining',{token:tk,employee:e.name,email:e.email,trainingType:type,trainingDate:date,issueDate,expiryDate,certBase64:uint8ToBase64(bytes)});
         if(!(r&&r.ok&&r.emailed)) emailedAll=false;
       }
-      downloadCerts(outputs);
-      setMsg({bad:false,text:`Issued ${chosen.length} certificate(s). Downloaded`+(emailedAll?' and emailed to each employee and the office.':'. Some emails did not send, check the backend.')});
+
+      setMsg({bad:false,text:`Issued ${chosen.length} certificate(s). Automatically emailed to the Office, Trainer, and Trainee`+(!emailedAll?' (Note: some emails bounced, check the addresses).':'.')});
       if(schedId){ await api('completeSchedule',{token:tk,id:schedId}); setSchedId(null); }
       setSel({}); onIssued&&onIssued();
     }catch(err){ setMsg({bad:true,text:'Could not issue: '+((err&&err.message)||'check your internet connection.')}); }
@@ -286,16 +339,19 @@ function GiveTraining({ t, employees, courses, schedule, isAdmin, onIssued, relo
         <h1 className="text-2xl font-bold text-slate-900">Give training</h1>
         {isAdmin && <button onClick={()=>setShowCourses(v=>!v)} className="text-sm font-semibold" style={{color:t.primary}}>{showCourses?'Done':'Manage courses'}</button>}
       </div>
-      <p className="text-slate-600 -mt-4 text-sm">Pick the training, tick the people who did it, and issue. A certificate is generated for each one and emailed to them and the office.</p>
+      <p className="text-slate-600 -mt-4 text-sm">Pick the training, tick the people who did it, and issue. A certificate is generated for each one and emailed to them, you, and the office.</p>
+
       {isAdmin && showCourses && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <h2 className="font-bold text-slate-800">Training courses</h2>
-          <div className="flex gap-2">
-            <input value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course name, e.g. Fire Safety" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-            <button onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 rounded-lg text-sm">Add</button>
+          <div className="flex gap-2 items-center">
+            <input value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course (e.g. Fire Safety)" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+            <input type="number" min="1" value={newCourseDur} onChange={e=>setNewCourseDur(e.target.value)} placeholder="Months valid" title="Duration in months" className="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+            <span className="text-sm text-slate-500 font-medium">months</span>
+            <button onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm ml-2">Add</button>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {typeList.map(c=><span key={c} className="flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700">{c}<button onClick={()=>delCourse(c)} className="text-slate-400 hover:text-red-500 px-1">&times;</button></span>)}
+          <div className="flex flex-wrap gap-2 pt-2">
+            {typeList.map(c=><span key={c.name} className="flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700">{c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span><button onClick={()=>delCourse(c.name)} className="text-slate-400 hover:text-red-500 px-1">&times;</button></span>)}
           </div>
         </div>
       )}
@@ -315,7 +371,7 @@ function GiveTraining({ t, employees, courses, schedule, isAdmin, onIssued, relo
         <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training type</label>
             <select value={type} onChange={e=>setType(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">
-              {typeList.map(x=><option key={x} value={x}>{x}</option>)}
+              {typeList.map(x=><option key={x.name} value={x.name}>{x.name} ({x.duration} months)</option>)}
             </select></div>
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training date</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
@@ -345,7 +401,7 @@ function GiveTraining({ t, employees, courses, schedule, isAdmin, onIssued, relo
 function Schedule({ t, employees, courses, schedule, reload }){
   const [course,setCourse]=useState(''); const [date,setDate]=useState(todayISO());
   const [sel,setSel]=useState({}); const [msg,setMsg]=useState(null); const [busy,setBusy]=useState(false);
-  useEffect(()=>{ if(!course&&courses.length)setCourse(courses[0]); },[courses]);
+  useEffect(()=>{ if(!course&&courses.length)setCourse(courses[0].name); },[courses]);
   const active=employees.filter(e=>e.active!==false);
   const chosen=active.filter(e=>sel[e.id]);
   const toggle=(id)=>setSel(s=>Object.assign({},s,{[id]:!s[id]}));
@@ -367,7 +423,7 @@ function Schedule({ t, employees, courses, schedule, reload }){
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Course</label>
-            <select value={course} onChange={e=>setCourse(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">{courses.map(c=><option key={c} value={c}>{c}</option>)}</select></div>
+            <select value={course} onChange={e=>setCourse(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">{courses.map(c=><option key={c.name} value={c.name}>{c.name}</option>)}</select></div>
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
           <div className="flex items-end"><button onClick={save} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg disabled:opacity-60">{busy?'Saving...':`Schedule ${chosen.length||''}`}</button></div>
@@ -411,7 +467,7 @@ function Dashboard({ t, training, onDelete, me }){
   const redl=async(r)=>{
     if(!window.confirm('Download the '+r.trainingType+' certificate for '+r.employee+'?'))return;
     try{ const b64=await loadCert(CONFIG.CERT_FILE);
-      const bytes=buildCertBytes(b64,{name:r.employee,trainingType:r.trainingType,trainingDate:r.trainingDate,issueDate:r.issueDate,expiryDate:r.expiryDate});
+      const bytes=buildCertBytes(b64,{name:r.employee,trainingType:r.trainingType,trainingDate:r.trainingDate,issueDate:r.issueDate,expiryDate:r.expiryDate,instructorName:r.trainer||CONFIG.INSTRUCTOR.name,instructorTitle:(r.trainingType||'Training')+' Instructor',instructorQual:CONFIG.INSTRUCTOR.qual});
       downloadBlob(new Blob([bytes],{type:DOCX_MIME}),safeName(r.trainingType)+'_'+safeName(r.employee)+'.docx');
     }catch(e){ alert('Could not build that certificate.'); }
   };
@@ -505,19 +561,19 @@ function Employees({ t, employees, reload }){
 /* ---------------- Logins (users) ---------------- */
 function People({ t, me, users, reload }){
   const canMakeAdmin=me.role==='superadmin';
-  const [f,setF]=useState({username:'',name:'',email:'',role:'user',password:genPassword()});
+  const [f,setF]=useState({username:'',name:'',email:'',role:'user',password:genPassword(),qual:''});
   const [msg,setMsg]=useState(null); const [created,setCreated]=useState(null); const [busy,setBusy]=useState(false); const [bulkMsg,setBulkMsg]=useState(null);
   const set=(k,v)=>setF(x=>Object.assign({},x,{[k]:v}));
   const add=async(e)=>{ e.preventDefault(); setMsg(null); setCreated(null); setBusy(true);
     const tk=store.get(SESS).token; const r=await api('addUser',{token:tk,user:f}); setBusy(false);
-    if(r.ok){ setCreated({username:f.username,password:f.password}); setF({username:'',name:'',email:'',role:'user',password:genPassword()}); reload(); }
+    if(r.ok){ setCreated({username:f.username,password:f.password}); setF({username:'',name:'',email:'',role:'user',password:genPassword(),qual:''}); reload(); }
     else setMsg({bad:true,text:errText(r)});
   };
   const onFile=async(e)=>{ const file=e.target.files[0]; if(!file)return; setBulkMsg(null);
     try{ const wb=XLSX.read(await file.arrayBuffer()); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
       const us=rows.map(r=>{ const low={}; Object.keys(r).forEach(k=>low[k.toString().trim().toLowerCase()]=r[k]);
-        return {username:String(low.username||'').trim(),name:String(low.name||low.username||'').trim(),email:String(low.email||'').trim(),role:(String(low.role||'user').trim().toLowerCase()==='admin'&&canMakeAdmin)?'admin':'user',password:String(low.password||'').trim()||genPassword()}; }).filter(u=>u.username);
-      if(us.length===0){ setBulkMsg({bad:true,text:'Needs columns: username, name, email, role, password.'}); e.target.value=''; return; }
+        return {username:String(low.username||'').trim(),name:String(low.name||low.username||'').trim(),email:String(low.email||'').trim(),role:(String(low.role||'user').trim().toLowerCase()==='admin'&&canMakeAdmin)?'admin':'user',password:String(low.password||'').trim()||genPassword(),qual:String(low.qualification||low.qual||'').trim()}; }).filter(u=>u.username);
+      if(us.length===0){ setBulkMsg({bad:true,text:'Needs columns: username, name, email, role, password, qualification.'}); e.target.value=''; return; }
       const tk=store.get(SESS).token; const r=await api('bulkAddUsers',{token:tk,users:us});
       if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added}, skipped ${r.skipped}.`}); reload(); } else setBulkMsg({bad:true,text:errText(r)});
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); } e.target.value='';
@@ -526,13 +582,14 @@ function People({ t, me, users, reload }){
   return (
     <div className="space-y-6 fade">
       <h1 className="text-2xl font-bold text-slate-900">Logins</h1>
-      <p className="text-slate-600 -mt-4 text-sm">People who sign in: trainers who issue certificates, plus admins. This is separate from the employee list.</p>
+      <p className="text-slate-600 -mt-4 text-sm">People who sign in: trainers who issue certificates, plus admins. The qualification appears on certificates they issue.</p>
       <div className="grid lg:grid-cols-2 gap-6 items-start">
         <form onSubmit={add} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.plus size={18}/> Add a login</div>
           <div className="p-5 space-y-3">
             <div className="grid sm:grid-cols-2 gap-3"><div><label className="block text-xs font-semibold text-slate-600 mb-1">Username</label><input required value={f.username} onChange={e=>set('username',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div><div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input value={f.name} onChange={e=>set('name',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div></div>
             <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email</label><input type="email" value={f.email} onChange={e=>set('email',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Qualification (shows on certs they issue, e.g. QQI Level 6)</label><input value={f.qual} onChange={e=>set('qual',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
             <div className="grid sm:grid-cols-2 gap-3">
               <div><label className="block text-xs font-semibold text-slate-600 mb-1">Access</label><select value={f.role} onChange={e=>set('role',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"><option value="user">Trainer</option>{canMakeAdmin && <option value="admin">Admin</option>}</select></div>
               <div><label className="block text-xs font-semibold text-slate-600 mb-1">Password</label><div className="flex gap-2"><input value={f.password} onChange={e=>set('password',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 font-mono text-sm" /><button type="button" onClick={()=>set('password',genPassword())} className="text-xs text-slate-500 border border-slate-300 rounded-lg px-2">New</button></div></div>
@@ -544,7 +601,7 @@ function People({ t, me, users, reload }){
         </form>
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.up size={18}/> Bulk upload (Excel)</div>
-          <div className="p-5 space-y-3 text-sm text-slate-600"><p>Columns: <b>username, name, email, role, password</b>. Blank passwords are generated. {canMakeAdmin?'Role admin is allowed.':'All added as trainers.'}</p>
+          <div className="p-5 space-y-3 text-sm text-slate-600"><p>Columns: <b>username, name, email, role, password, qualification</b>. Blank passwords are generated. {canMakeAdmin?'Role admin is allowed.':'All added as trainers.'}</p>
             <label className="flex items-center justify-center gap-2 border-2 border-dashed border-slate-300 rounded-lg py-6 cursor-pointer hover:border-slate-400" style={{color:t.primary}}><I.up size={18}/> <span className="font-semibold">Choose .xlsx or .csv</span><input type="file" accept=".xlsx,.xls,.csv" onChange={onFile} className="hidden" /></label>
             {bulkMsg && <p className={`font-medium ${bulkMsg.bad?'text-red-600':'text-emerald-600'}`}>{bulkMsg.text}</p>}
           </div>
@@ -552,8 +609,8 @@ function People({ t, me, users, reload }){
       </div>
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All logins ({users.length})</h2></div>
-        <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 text-left"><tr><th className="px-4 py-2 font-semibold">Name</th><th className="px-4 py-2 font-semibold">Username</th><th className="px-4 py-2 font-semibold">Email</th><th className="px-4 py-2 font-semibold">Access</th><th className="px-4 py-2"></th></tr></thead>
-          <tbody>{users.map(u=><tr key={u.username} className="border-t border-slate-100"><td className="px-4 py-2.5 font-medium text-slate-800">{u.name}</td><td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-2.5 text-slate-600">{u.email||'-'}</td><td className="px-4 py-2.5"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-2.5 text-right">{u.username!==me.username && <button onClick={()=>del(u)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>}</td></tr>)}</tbody>
+        <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 text-left"><tr><th className="px-4 py-2 font-semibold">Name</th><th className="px-4 py-2 font-semibold">Username</th><th className="px-4 py-2 font-semibold">Email</th><th className="px-4 py-2 font-semibold">Qualification</th><th className="px-4 py-2 font-semibold">Access</th><th className="px-4 py-2"></th></tr></thead>
+          <tbody>{users.map(u=><tr key={u.username} className="border-t border-slate-100"><td className="px-4 py-2.5 font-medium text-slate-800">{u.name}</td><td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-2.5 text-slate-600">{u.email||'-'}</td><td className="px-4 py-2.5 text-slate-600">{u.qual||'-'}</td><td className="px-4 py-2.5"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-2.5 text-right">{u.username!==me.username && <button onClick={()=>del(u)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>}</td></tr>)}</tbody>
         </table></div>
       </div>
     </div>
