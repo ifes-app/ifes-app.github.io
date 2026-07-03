@@ -110,9 +110,9 @@ function buildCertBytes(b64,data){
     trainingDate:fmtUK(data.trainingDate),
     issueDate:fmtUK(data.issueDate),
     expiryDate:fmtUK(data.expiryDate),
-    instructorName:data.instructorName||CONFIG.INSTRUCTOR.name,
-    instructorTitle:data.instructorTitle||CONFIG.INSTRUCTOR.title,
-    instructorQual:data.instructorQual||CONFIG.INSTRUCTOR.qual
+    instructorName:data.instructorName,
+    instructorTitle:data.instructorTitle,
+    instructorQual:data.instructorQual
   });
   return doc.getZip().generate({type:'uint8array'});
 }
@@ -130,7 +130,7 @@ const I={
   plus:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 5v14M5 12h14"/></svg>,
   up:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 20h16"/></svg>,
   down:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 20h16"/></svg>,
-  out:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>,
+  out:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>,
   trash:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>,
   lock:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>,
   check:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
@@ -293,7 +293,7 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   };
   const delCourse=async(id, name)=>{
     if(!window.confirm('Remove course "'+name+'"?'))return;
-    setCourseBusy(true); setCourseMsg(null);
+    setCourseBusy(true); setCourseMsg({bad:false,text:'Deleting '+name+'...'});
     const tk=store.get(SESS).token;
     const r=await api('deleteCourse',{token:tk,id:id});
     setCourseBusy(false);
@@ -330,9 +330,12 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
       const b64=await loadCert(CONFIG.CERT_FILE);
       const tk=store.get(SESS).token; let emailedAll=true; let pdfSuccess=true;
 
-      const instructorName = (me && me.name) || CONFIG.INSTRUCTOR.name;
+      // Logic: Use logged in user's name if available.
+      const instructorName = (me && me.name) ? me.name : CONFIG.INSTRUCTOR.name;
+      // Dynamically create title based on the course name
       const instructorTitle = typeName + ' Instructor';
-      const instructorQual = (me && me.qual) || CONFIG.INSTRUCTOR.qual;
+      // If a specific person is logged in, use their exact qualification (even if empty). Otherwise use fallback.
+      const instructorQual = (me && me.name) ? (me.qual || '') : CONFIG.INSTRUCTOR.qual;
 
       for(const e of chosen){
         const issueDate=todayISO();
@@ -375,7 +378,7 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
           </div>
           {courseMsg && <p className={`text-sm font-medium ${courseMsg.bad?'text-red-600':'text-emerald-600'}`}>{courseMsg.text}</p>}
           <div className="flex flex-wrap gap-2 pt-2">
-            {typeList.map(c=><span key={c.id} className="flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 opacity-90">{c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span><button disabled={courseBusy} onClick={()=>delCourse(c.id, c.name)} className="text-slate-400 hover:text-red-500 px-1 disabled:opacity-50">&times;</button></span>)}
+            {typeList.map(c=><span key={c.id} className={`flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 opacity-90 ${courseBusy?'pointer-events-none':''}`}>{c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span><button disabled={courseBusy} onClick={()=>delCourse(c.id, c.name)} className="text-slate-400 hover:text-red-500 px-1 disabled:opacity-50">&times;</button></span>)}
           </div>
         </div>
       )}
@@ -425,6 +428,7 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
 function Schedule({ t, employees, courses, schedule, reload }){
   const [course,setCourse]=useState(''); const [date,setDate]=useState(todayISO());
   const [sel,setSel]=useState({}); const [msg,setMsg]=useState(null); const [busy,setBusy]=useState(false);
+  const [delBusy,setDelBusy]=useState(null);
   useEffect(()=>{ if(!course&&courses.length)setCourse(courses[0].name); },[courses]);
   const active=employees.filter(e=>e.active!==false);
   const chosen=active.filter(e=>sel[e.id]);
@@ -432,14 +436,20 @@ function Schedule({ t, employees, courses, schedule, reload }){
   const save=async()=>{
     if(!course){ setMsg({bad:true,text:'Pick a course.'}); return; }
     if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
-    setBusy(true); setMsg(null);
+    setBusy(true); setMsg({bad:false,text:'Saving session...'});
     const tk=store.get(SESS).token;
     const r=await api('addSchedule',{token:tk,course,date,employees:chosen.map(e=>({name:e.name,email:e.email}))});
     setBusy(false);
     if(r.ok){ setSel({}); setMsg({bad:false,text:'Session scheduled. The trainer sees it on Give training.'}); reload(); }
     else setMsg({bad:true,text:errText(r)});
   };
-  const del=async(s)=>{ if(!window.confirm('Delete this planned session?'))return; const tk=store.get(SESS).token; await api('deleteSchedule',{token:tk,id:s.id}); reload(); };
+  const del=async(s)=>{ 
+    if(!window.confirm('Delete this planned session?'))return; 
+    setDelBusy(s.id);
+    const tk=store.get(SESS).token; 
+    await api('deleteSchedule',{token:tk,id:s.id}); 
+    setDelBusy(null); reload(); 
+  };
   const planned=(schedule||[]).filter(s=>s.status!=='Done');
   return (
     <div className="space-y-6 fade">
@@ -447,7 +457,7 @@ function Schedule({ t, employees, courses, schedule, reload }){
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Course</label>
-            <select value={course} onChange={e=>setCourse(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">{courses.map(c=><option key={c.name} value={c.name}>{c.name}</option>)}</select></div>
+            <select value={course} onChange={e=>setCourse(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">{courses.map(c=><option key={c.id} value={c.name}>{c.name}</option>)}</select></div>
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
           <div className="flex items-end"><button onClick={save} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg disabled:opacity-60">{busy?'Saving...':`Schedule ${chosen.length||''}`}</button></div>
@@ -468,9 +478,9 @@ function Schedule({ t, employees, courses, schedule, reload }){
         <ul className="divide-y divide-slate-100">
           {planned.length===0 && <li className="p-6 text-slate-400 italic">Nothing planned.</li>}
           {planned.map(s=>(
-            <li key={s.id} className="px-5 py-3 flex items-center justify-between">
+            <li key={s.id} className={`px-5 py-3 flex items-center justify-between ${delBusy===s.id?'opacity-50 pointer-events-none':''}`}>
               <div><p className="font-medium text-slate-800">{s.course} <span className="text-slate-400 text-sm">- {fmtUK(s.date)}</span></p><p className="text-xs text-slate-400">{s.employees.map(e=>e.name).join(', ')}</p></div>
-              <button onClick={()=>del(s)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>
+              <button disabled={delBusy===s.id} onClick={()=>del(s)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>
             </li>
           ))}
         </ul>
@@ -488,6 +498,7 @@ function certState(row){
   return {key:'valid',tone:'green',label:'Valid'};
 }
 function Dashboard({ t, training, onDelete, me }){
+  const [delBusy, setDelBusy] = useState(null);
   const redl=async(r)=>{
     if(!window.confirm('Download the '+r.trainingType+' certificate for '+r.employee+'?'))return;
     try{ const b64=await loadCert(CONFIG.CERT_FILE);
@@ -499,7 +510,13 @@ function Dashboard({ t, training, onDelete, me }){
   const rows=training.map(r=>Object.assign({},r,{st:certState(r)}));
   const count=(k)=>rows.filter(r=>r.st.key===k).length;
   const shown=rows.filter(r=>!filter||String(r.employee).toLowerCase().includes(filter.toLowerCase())).sort((a,b)=>(a.expiryDate||'').localeCompare(b.expiryDate||''));
-  const del=async(r)=>{ if(!window.confirm('Delete this record for '+r.employee+'?'))return; const tk=store.get(SESS).token; await api('deleteTraining',{token:tk,id:r.id}); onDelete&&onDelete(); };
+  const del=async(r)=>{ 
+    if(!window.confirm('Delete this record for '+r.employee+'?'))return; 
+    setDelBusy(r.id);
+    const tk=store.get(SESS).token; 
+    await api('deleteTraining',{token:tk,id:r.id}); 
+    setDelBusy(null); onDelete&&onDelete(); 
+  };
   const cards=[['valid','Valid','text-emerald-600'],['soon','Expiring soon (90 days)','text-amber-600'],['expired','Expired','text-red-600']];
   return (
     <div className="space-y-6 fade">
@@ -514,13 +531,13 @@ function Dashboard({ t, training, onDelete, me }){
           <tbody>
             {shown.length===0 && <tr><td colSpan="6" className="px-4 py-6 text-center text-slate-400 italic">No certificates yet.</td></tr>}
             {shown.map(r=>(
-              <tr key={r.id} className="border-t border-slate-100">
+              <tr key={r.id} className={`border-t border-slate-100 ${delBusy===r.id?'opacity-50 pointer-events-none':''}`}>
                 <td className="px-4 py-2.5 font-medium text-slate-800">{r.employee}</td>
                 <td className="px-4 py-2.5 text-slate-600">{r.trainingType}</td>
                 <td className="px-4 py-2.5 text-slate-600">{fmtUK(r.trainingDate)||'-'}</td>
                 <td className="px-4 py-2.5 text-slate-600">{fmtUK(r.expiryDate)||'-'}</td>
                 <td className="px-4 py-2.5"><Badge tone={r.st.tone}>{r.st.label}</Badge></td>
-                <td className="px-4 py-2.5 text-right"><div className="flex items-center justify-end gap-2"><button onClick={()=>redl(r)} title="Download certificate" className="text-slate-400 hover:text-slate-700"><I.down size={16}/></button>{me.role==='admin'||me.role==='superadmin' ? <button onClick={()=>del(r)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button> : null}</div></td>
+                <td className="px-4 py-2.5 text-right"><div className="flex items-center justify-end gap-2"><button onClick={()=>redl(r)} title="Download certificate" className="text-slate-400 hover:text-slate-700"><I.down size={16}/></button>{me.role==='admin'||me.role==='superadmin' ? <button disabled={delBusy===r.id} onClick={()=>del(r)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button> : null}</div></td>
               </tr>
             ))}
           </tbody>
@@ -534,11 +551,13 @@ function Dashboard({ t, training, onDelete, me }){
 function Employees({ t, employees, reload }){
   const [name,setName]=useState(''); const [email,setEmail]=useState('');
   const [msg,setMsg]=useState(null); const [bulkMsg,setBulkMsg]=useState(null); const [busy,setBusy]=useState(false);
-  const add=async(e)=>{ e.preventDefault(); if(!name.trim())return; setBusy(true); setMsg(null);
+  const [delBusy,setDelBusy]=useState(null);
+  
+  const add=async(e)=>{ e.preventDefault(); if(!name.trim())return; setBusy(true); setMsg({bad:false,text:'Adding employee...'});
     const tk=store.get(SESS).token; const r=await api('addEmployee',{token:tk,employee:{name:name.trim(),email:email.trim()}}); setBusy(false);
-    if(r.ok){ setName(''); setEmail(''); reload(); } else setMsg({bad:true,text:errText(r)});
+    if(r.ok){ setName(''); setEmail(''); setMsg({bad:false,text:'Added.'}); reload(); } else setMsg({bad:true,text:errText(r)});
   };
-  const onFile=async(e)=>{ const f=e.target.files[0]; if(!f)return; setBulkMsg(null);
+  const onFile=async(e)=>{ const f=e.target.files[0]; if(!f)return; setBulkMsg({bad:false,text:'Uploading...'});
     try{ const wb=XLSX.read(await f.arrayBuffer()); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
       const emps=rows.map(r=>{ const low={}; Object.keys(r).forEach(k=>low[k.toString().trim().toLowerCase()]=r[k]); return {name:String(low.name||'').trim(),email:String(low.email||'').trim()}; }).filter(x=>x.name);
       if(emps.length===0){ setBulkMsg({bad:true,text:'No rows found. Needs columns: name, email.'}); e.target.value=''; return; }
@@ -547,7 +566,13 @@ function Employees({ t, employees, reload }){
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); }
     e.target.value='';
   };
-  const del=async(emp)=>{ if(!window.confirm('Remove '+emp.name+'?'))return; const tk=store.get(SESS).token; await api('deleteEmployee',{token:tk,id:emp.id}); reload(); };
+  const del=async(emp)=>{ 
+    if(!window.confirm('Remove '+emp.name+'?'))return; 
+    setDelBusy(emp.id);
+    const tk=store.get(SESS).token; 
+    await api('deleteEmployee',{token:tk,id:emp.id}); 
+    setDelBusy(null); reload(); 
+  };
   return (
     <div className="space-y-6 fade">
       <h1 className="text-2xl font-bold text-slate-900">Employees</h1>
@@ -556,10 +581,10 @@ function Employees({ t, employees, reload }){
         <form onSubmit={add} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.plus size={18}/> Add one</div>
           <div className="p-5 space-y-3">
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input value={name} onChange={e=>setName(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email (cert goes here)</label><input type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
-            {msg && <p className="text-sm text-red-600 font-medium">{msg.text}</p>}
-            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 disabled:opacity-60">Add employee</button>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input disabled={busy} value={name} onChange={e=>setName(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email (cert goes here)</label><input disabled={busy} type="email" value={email} onChange={e=>setEmail(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
+            {msg && <p className={`text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
+            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 disabled:opacity-60">{busy?'Working...':'Add employee'}</button>
           </div>
         </form>
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -575,7 +600,7 @@ function Employees({ t, employees, reload }){
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All employees ({employees.length})</h2></div>
         <ul className="divide-y divide-slate-100">
           {employees.length===0 && <li className="p-6 text-slate-400 italic">None yet.</li>}
-          {employees.map(e=><li key={e.id} className="px-5 py-3 flex items-center justify-between"><div><p className="font-medium text-slate-800">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div><button onClick={()=>del(e)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button></li>)}
+          {employees.map(e=><li key={e.id} className={`px-5 py-3 flex items-center justify-between ${delBusy===e.id?'opacity-50 pointer-events-none':''}`}><div><p className="font-medium text-slate-800">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div><button disabled={delBusy===e.id} onClick={()=>del(e)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button></li>)}
         </ul>
       </div>
     </div>
@@ -587,13 +612,15 @@ function People({ t, me, users, reload }){
   const canMakeAdmin=me.role==='superadmin';
   const [f,setF]=useState({username:'',name:'',email:'',role:'user',password:genPassword(),qual:''});
   const [msg,setMsg]=useState(null); const [created,setCreated]=useState(null); const [busy,setBusy]=useState(false); const [bulkMsg,setBulkMsg]=useState(null);
+  const [delBusy,setDelBusy]=useState(null);
+  
   const set=(k,v)=>setF(x=>Object.assign({},x,{[k]:v}));
-  const add=async(e)=>{ e.preventDefault(); setMsg(null); setCreated(null); setBusy(true);
+  const add=async(e)=>{ e.preventDefault(); setMsg({bad:false,text:'Adding login...'}); setCreated(null); setBusy(true);
     const tk=store.get(SESS).token; const r=await api('addUser',{token:tk,user:f}); setBusy(false);
-    if(r.ok){ setCreated({username:f.username,password:f.password}); setF({username:'',name:'',email:'',role:'user',password:genPassword(),qual:''}); reload(); }
+    if(r.ok){ setCreated({username:f.username,password:f.password}); setF({username:'',name:'',email:'',role:'user',password:genPassword(),qual:''}); setMsg(null); reload(); }
     else setMsg({bad:true,text:errText(r)});
   };
-  const onFile=async(e)=>{ const file=e.target.files[0]; if(!file)return; setBulkMsg(null);
+  const onFile=async(e)=>{ const file=e.target.files[0]; if(!file)return; setBulkMsg({bad:false,text:'Uploading...'});
     try{ const wb=XLSX.read(await file.arrayBuffer()); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
       const us=rows.map(r=>{ const low={}; Object.keys(r).forEach(k=>low[k.toString().trim().toLowerCase()]=r[k]);
         return {username:String(low.username||'').trim(),name:String(low.name||low.username||'').trim(),email:String(low.email||'').trim(),role:(String(low.role||'user').trim().toLowerCase()==='admin'&&canMakeAdmin)?'admin':'user',password:String(low.password||'').trim()||genPassword(),qual:String(low.qualification||low.qual||'').trim()}; }).filter(u=>u.username);
@@ -602,7 +629,14 @@ function People({ t, me, users, reload }){
       if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added}, skipped ${r.skipped}.`}); reload(); } else setBulkMsg({bad:true,text:errText(r)});
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); } e.target.value='';
   };
-  const del=async(u)=>{ if(!window.confirm('Remove '+u.username+'?'))return; const tk=store.get(SESS).token; const r=await api('deleteUser',{token:tk,username:u.username}); if(r.ok)reload(); else alert('Could not remove.'); };
+  const del=async(u)=>{ 
+    if(!window.confirm('Remove '+u.username+'?'))return; 
+    setDelBusy(u.username);
+    const tk=store.get(SESS).token; 
+    const r=await api('deleteUser',{token:tk,username:u.username}); 
+    setDelBusy(null);
+    if(r.ok)reload(); else alert('Could not remove.'); 
+  };
   return (
     <div className="space-y-6 fade">
       <h1 className="text-2xl font-bold text-slate-900">Logins</h1>
@@ -611,16 +645,16 @@ function People({ t, me, users, reload }){
         <form onSubmit={add} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           <div style={{backgroundColor:t.primary}} className="px-5 py-3 text-white font-bold flex items-center gap-2"><I.plus size={18}/> Add a login</div>
           <div className="p-5 space-y-3">
-            <div className="grid sm:grid-cols-2 gap-3"><div><label className="block text-xs font-semibold text-slate-600 mb-1">Username</label><input required value={f.username} onChange={e=>set('username',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div><div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input value={f.name} onChange={e=>set('name',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div></div>
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email</label><input type="email" value={f.email} onChange={e=>set('email',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
-            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Qualification (shows on certs they issue, e.g. QQI Level 6)</label><input value={f.qual} onChange={e=>set('qual',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
+            <div className="grid sm:grid-cols-2 gap-3"><div><label className="block text-xs font-semibold text-slate-600 mb-1">Username</label><input disabled={busy} required value={f.username} onChange={e=>set('username',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div><div><label className="block text-xs font-semibold text-slate-600 mb-1">Full name</label><input disabled={busy} value={f.name} onChange={e=>set('name',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Email</label><input disabled={busy} type="email" value={f.email} onChange={e=>set('email',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
+            <div><label className="block text-xs font-semibold text-slate-600 mb-1">Qualification (shows on certs they issue, e.g. QQI Level 6)</label><input disabled={busy} value={f.qual} onChange={e=>set('qual',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2" /></div>
             <div className="grid sm:grid-cols-2 gap-3">
-              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Access</label><select value={f.role} onChange={e=>set('role',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"><option value="user">Trainer</option>{canMakeAdmin && <option value="admin">Admin</option>}</select></div>
-              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Password</label><div className="flex gap-2"><input value={f.password} onChange={e=>set('password',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 font-mono text-sm" /><button type="button" onClick={()=>set('password',genPassword())} className="text-xs text-slate-500 border border-slate-300 rounded-lg px-2">New</button></div></div>
+              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Access</label><select disabled={busy} value={f.role} onChange={e=>set('role',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 bg-white"><option value="user">Trainer</option>{canMakeAdmin && <option value="admin">Admin</option>}</select></div>
+              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Password</label><div className="flex gap-2"><input disabled={busy} value={f.password} onChange={e=>set('password',e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 font-mono text-sm" /><button disabled={busy} type="button" onClick={()=>set('password',genPassword())} className="text-xs text-slate-500 border border-slate-300 rounded-lg px-2">New</button></div></div>
             </div>
-            {msg && <p className="text-sm text-red-600 font-medium">{msg.text}</p>}
+            {msg && <p className={`text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
             {created && <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 text-sm"><p className="font-semibold text-emerald-800 flex items-center gap-1"><I.check size={15}/> Created. Give them:</p><p className="mt-1 font-mono text-slate-700">Username: {created.username}<br/>Password: {created.password}</p></div>}
-            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 disabled:opacity-60">{busy?'Adding...':'Add login'}</button>
+            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 disabled:opacity-60">{busy?'Working...':'Add login'}</button>
           </div>
         </form>
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -634,7 +668,7 @@ function People({ t, me, users, reload }){
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All logins ({users.length})</h2></div>
         <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 text-left"><tr><th className="px-4 py-2 font-semibold">Name</th><th className="px-4 py-2 font-semibold">Username</th><th className="px-4 py-2 font-semibold">Email</th><th className="px-4 py-2 font-semibold">Qualification</th><th className="px-4 py-2 font-semibold">Access</th><th className="px-4 py-2"></th></tr></thead>
-          <tbody>{users.map(u=><tr key={u.username} className="border-t border-slate-100"><td className="px-4 py-2.5 font-medium text-slate-800">{u.name}</td><td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-2.5 text-slate-600">{u.email||'-'}</td><td className="px-4 py-2.5 text-slate-600">{u.qual||'-'}</td><td className="px-4 py-2.5"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-2.5 text-right">{u.username!==me.username && <button onClick={()=>del(u)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>}</td></tr>)}</tbody>
+          <tbody>{users.map(u=><tr key={u.username} className={`border-t border-slate-100 ${delBusy===u.username?'opacity-50 pointer-events-none':''}`}><td className="px-4 py-2.5 font-medium text-slate-800">{u.name}</td><td className="px-4 py-2.5 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-2.5 text-slate-600">{u.email||'-'}</td><td className="px-4 py-2.5 text-slate-600">{u.qual||'-'}</td><td className="px-4 py-2.5"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-2.5 text-right">{u.username!==me.username && <button disabled={delBusy===u.username} onClick={()=>del(u)} className="text-slate-300 hover:text-red-500"><I.trash size={16}/></button>}</td></tr>)}</tbody>
         </table></div>
       </div>
     </div>
@@ -647,7 +681,7 @@ function ChangePassword({ t, onClose }){
   const submit=async(e)=>{ e.preventDefault(); setMsg(null);
     if(nw.length<6){ setMsg({bad:true,text:'New password must be at least 6 characters.'}); return; }
     if(nw!==cf){ setMsg({bad:true,text:'The new passwords do not match.'}); return; }
-    setBusy(true);
+    setBusy(true); setMsg({bad:false,text:'Saving...'});
     try{ const tk=store.get(SESS).token; const r=await api('changePassword',{token:tk,currentPassword:cur,newPassword:nw}); setBusy(false);
       if(r.ok){ setMsg({bad:false,text:'Password changed.'}); setCur('');setNw('');setCf(''); }
       else if(r.error==='bad_current') setMsg({bad:true,text:'Current password is wrong.'});
@@ -659,11 +693,11 @@ function ChangePassword({ t, onClose }){
       <form onClick={e=>e.stopPropagation()} onSubmit={submit} className="bg-white rounded-2xl shadow-xl w-full max-w-sm overflow-hidden">
         <div style={{backgroundColor:t.primary}} className="px-6 py-4 text-white font-bold flex items-center gap-2"><I.lock size={18}/> Change password</div>
         <div className="p-6 space-y-3">
-          <input type="password" placeholder="Current password" value={cur} onChange={e=>setCur(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
-          <input type="password" placeholder="New password" value={nw} onChange={e=>setNw(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
-          <input type="password" placeholder="Confirm new password" value={cf} onChange={e=>setCf(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
+          <input disabled={busy} type="password" placeholder="Current password" value={cur} onChange={e=>setCur(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
+          <input disabled={busy} type="password" placeholder="New password" value={nw} onChange={e=>setNw(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
+          <input disabled={busy} type="password" placeholder="Confirm new password" value={cf} onChange={e=>setCf(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" />
           {msg && <p className={`text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
-          <div className="flex gap-2 pt-1"><button type="button" onClick={onClose} className="flex-1 border border-slate-300 rounded-lg py-2.5 text-slate-600 font-semibold">Close</button><button disabled={busy} style={{backgroundColor:t.secondary}} className="flex-1 text-white font-bold py-2.5 rounded-lg disabled:opacity-60">{busy?'Saving...':'Save'}</button></div>
+          <div className="flex gap-2 pt-1"><button disabled={busy} type="button" onClick={onClose} className="flex-1 border border-slate-300 rounded-lg py-2.5 text-slate-600 font-semibold disabled:opacity-60">Close</button><button disabled={busy} style={{backgroundColor:t.secondary}} className="flex-1 text-white font-bold py-2.5 rounded-lg disabled:opacity-60">{busy?'Working...':'Save'}</button></div>
         </div>
       </form>
     </div>
