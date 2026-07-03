@@ -267,29 +267,48 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   const typeList=(courses&&courses.length)?courses:CONFIG.TRAINING_TYPES;
 
   const [sel,setSel]=useState({});
-  const [type,setType]=useState('');
+  const [typeId,setTypeId]=useState('');
   const [newCourse,setNewCourse]=useState('');
   const [newCourseDur,setNewCourseDur]=useState(12);
   const [showCourses,setShowCourses]=useState(false);
+  const [courseBusy,setCourseBusy]=useState(false);
+  const [courseMsg,setCourseMsg]=useState(null);
 
   // Set default type if not selected
   useEffect(()=>{
-    if((!type || !typeList.find(x=>x.name===type)) && typeList.length) {
-      setType(typeList[0].name);
+    if((!typeId || !typeList.find(x=>x.id===typeId)) && typeList.length) {
+      setTypeId(typeList[0].id);
     }
-  }, [courses, type]);
+  }, [courses, typeId]);
 
   const addCourse=async()=>{
     const n=newCourse.trim();
-    if(!n)return;
+    if(!n){ setCourseMsg({bad:true,text:'Enter a course name.'}); return; }
+    setCourseBusy(true); setCourseMsg(null);
     const tk=store.get(SESS).token;
     const r=await api('addCourse',{token:tk, name:n, duration:newCourseDur});
-    if(r.ok){ setNewCourse(''); setNewCourseDur(12); reloadCourses(); setType(n); }
-    else alert(errText(r));
+    setCourseBusy(false);
+    if(r.ok){ setNewCourse(''); setNewCourseDur(12); reloadCourses(); setTypeId(r.id); setCourseMsg({bad:false,text:'Course added.'}); }
+    else setCourseMsg({bad:true,text:errText(r)});
   };
-  const delCourse=async(n)=>{ if(!window.confirm('Remove course "'+n+'"?'))return; const tk=store.get(SESS).token; await api('deleteCourse',{token:tk,name:n}); reloadCourses(); };
+  const delCourse=async(id, name)=>{
+    if(!window.confirm('Remove course "'+name+'"?'))return;
+    setCourseBusy(true); setCourseMsg(null);
+    const tk=store.get(SESS).token;
+    const r=await api('deleteCourse',{token:tk,id:id});
+    setCourseBusy(false);
+    if(r.ok){ reloadCourses(); setCourseMsg({bad:false,text:'Course removed.'}); }
+    else setCourseMsg({bad:true,text:errText(r)});
+  };
 
-  const runSession=(sess)=>{ setType(sess.course); setDate(sess.date); const n={}; sess.employees.forEach(e=>{ const match=employees.find(x=>x.name===e.name); if(match)n[match.id]=true; }); setSel(n); setSchedId(sess.id); setMsg({bad:false,text:'Session loaded: '+sess.course+' on '+fmtUK(sess.date)+'. Check the ticks and press Issue.'}); };
+  const runSession=(sess)=>{ 
+    const matchCourse = courses.find(c => c.name === sess.course);
+    if(matchCourse) setTypeId(matchCourse.id);
+    setDate(sess.date); 
+    const n={}; sess.employees.forEach(e=>{ const match=employees.find(x=>x.name===e.name); if(match)n[match.id]=true; }); 
+    setSel(n); setSchedId(sess.id); 
+    setMsg({bad:false,text:'Session loaded: '+sess.course+' on '+fmtUK(sess.date)+'. Check the ticks and press Issue.'}); 
+  };
 
   const [date,setDate]=useState(todayISO()); const [q,setQ]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(null);
@@ -301,32 +320,36 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
 
   const issue=async()=>{
     if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
-    if(!window.confirm('Issue '+type+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
+    const courseObj = typeList.find(c => c.id === typeId) || typeList[0];
+    const typeName = courseObj.name || 'Training';
+    const durationMonths = courseObj.duration || 36;
+
+    if(!window.confirm('Issue '+typeName+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
     setBusy(true); setMsg({bad:false,text:'Generating and emailing certificates...'});
     try{
       const b64=await loadCert(CONFIG.CERT_FILE);
-      const tk=store.get(SESS).token; let emailedAll=true;
+      const tk=store.get(SESS).token; let emailedAll=true; let pdfSuccess=true;
 
-      // Calculate Expiry Date dynamically based on selected course duration
-      const courseObj = courses.find(c => c.name === type);
-      const durationMonths = courseObj ? (parseInt(courseObj.duration) || 36) : 36;
-
-      // The logged-in trainer signs the certificate
       const instructorName = (me && me.name) || CONFIG.INSTRUCTOR.name;
-      const instructorTitle = type + ' Instructor';
+      const instructorTitle = typeName + ' Instructor';
       const instructorQual = (me && me.qual) || CONFIG.INSTRUCTOR.qual;
 
       for(const e of chosen){
         const issueDate=todayISO();
         const expiryDate=addMonths(date, durationMonths);
 
-        const bytes=buildCertBytes(b64,{name:e.name,trainingType:type,trainingDate:date,issueDate,expiryDate,instructorName,instructorTitle,instructorQual});
+        const bytes=buildCertBytes(b64,{name:e.name,trainingType:typeName,trainingDate:date,issueDate,expiryDate,instructorName,instructorTitle,instructorQual});
 
-        const r=await api('recordTraining',{token:tk,employee:e.name,email:e.email,trainingType:type,trainingDate:date,issueDate,expiryDate,certBase64:uint8ToBase64(bytes)});
+        const r=await api('recordTraining',{token:tk,employee:e.name,email:e.email,trainingType:typeName,trainingDate:date,issueDate,expiryDate,certBase64:uint8ToBase64(bytes)});
         if(!(r&&r.ok&&r.emailed)) emailedAll=false;
+        if(r && r.ok && r.emailedPdf===false) pdfSuccess = false;
       }
 
-      setMsg({bad:false,text:`Issued ${chosen.length} certificate(s). Automatically emailed to the Office, Trainer, and Trainee`+(!emailedAll?' (Note: some emails bounced, check the addresses).':'.')});
+      let finalMsg = `Issued ${chosen.length} certificate(s). Emailed to the Office, Trainer, and Trainee.`;
+      if(!emailedAll) finalMsg += ' (Note: Some emails bounced).';
+      if(!pdfSuccess) finalMsg += ' (Warning: Sent as DOCX. Tell your Admin to enable "Drive API" in Google Apps Script to allow PDFs).';
+
+      setMsg({bad:false,text: finalMsg});
       if(schedId){ await api('completeSchedule',{token:tk,id:schedId}); setSchedId(null); }
       setSel({}); onIssued&&onIssued();
     }catch(err){ setMsg({bad:true,text:'Could not issue: '+((err&&err.message)||'check your internet connection.')}); }
@@ -345,13 +368,14 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <h2 className="font-bold text-slate-800">Training courses</h2>
           <div className="flex gap-2 items-center">
-            <input value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course (e.g. Fire Safety)" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-            <input type="number" min="1" value={newCourseDur} onChange={e=>setNewCourseDur(e.target.value)} placeholder="Months valid" title="Duration in months" className="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+            <input disabled={courseBusy} value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course (e.g. Fire Safety)" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+            <input disabled={courseBusy} type="number" min="1" value={newCourseDur} onChange={e=>setNewCourseDur(e.target.value)} placeholder="Months valid" title="Duration in months" className="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
             <span className="text-sm text-slate-500 font-medium">months</span>
-            <button onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm ml-2">Add</button>
+            <button disabled={courseBusy} onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm ml-2 disabled:opacity-60">{courseBusy?'...':'Add'}</button>
           </div>
+          {courseMsg && <p className={`text-sm font-medium ${courseMsg.bad?'text-red-600':'text-emerald-600'}`}>{courseMsg.text}</p>}
           <div className="flex flex-wrap gap-2 pt-2">
-            {typeList.map(c=><span key={c.name} className="flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700">{c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span><button onClick={()=>delCourse(c.name)} className="text-slate-400 hover:text-red-500 px-1">&times;</button></span>)}
+            {typeList.map(c=><span key={c.id} className="flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 opacity-90">{c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span><button disabled={courseBusy} onClick={()=>delCourse(c.id, c.name)} className="text-slate-400 hover:text-red-500 px-1 disabled:opacity-50">&times;</button></span>)}
           </div>
         </div>
       )}
@@ -370,8 +394,8 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
         <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training type</label>
-            <select value={type} onChange={e=>setType(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">
-              {typeList.map(x=><option key={x.name} value={x.name}>{x.name} ({x.duration} months)</option>)}
+            <select value={typeId} onChange={e=>setTypeId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">
+              {typeList.map(x=><option key={x.id} value={x.id}>{x.name} ({x.duration} months)</option>)}
             </select></div>
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training date</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
@@ -387,7 +411,7 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
           {active.length===0 && <li className="p-6 text-slate-400 italic">No employees yet. Add them on the Employees tab.</li>}
           {list.map(e=>(
             <li key={e.id} className="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50" onClick={()=>toggle(e.id)}>
-              <input type="checkbox" checked={!!sel[e.id]} onChange={()=>toggle(e.id)} className="w-4 h-4" />
+              <input type="checkbox" checked={!!sel[e.id]} readOnly className="w-4 h-4 pointer-events-none" />
               <div><p className="font-medium text-slate-800 text-sm">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div>
             </li>
           ))}
@@ -433,7 +457,7 @@ function Schedule({ t, employees, courses, schedule, reload }){
           {active.length===0 && <li className="p-6 text-slate-400 italic">No employees yet. Add them on the Employees tab.</li>}
           {active.map(e=>(
             <li key={e.id} className="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50" onClick={()=>toggle(e.id)}>
-              <input type="checkbox" checked={!!sel[e.id]} onChange={()=>toggle(e.id)} className="w-4 h-4" />
+              <input type="checkbox" checked={!!sel[e.id]} readOnly className="w-4 h-4 pointer-events-none" />
               <div><p className="font-medium text-slate-800 text-sm">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div>
             </li>
           ))}
