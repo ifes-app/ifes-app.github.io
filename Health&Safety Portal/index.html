@@ -34,7 +34,9 @@ const CONFIG = {
   BACKEND_PREFIX: "https://script.google.com/macros/s/AKfycbz51Kg6kdeyAMvQ3d79NlVlqRGyTl-9jbWrDMYLzv3G7Je3CemcG0WGqX",
   LOGO_URL: "https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp",
   CERT_FILE: "Cert.txt",
+  /* Training fallback if sheet is empty. */
   TRAINING_TYPES: [ {id: "1", name: "Manual Handling", duration: 36} ],
+  /* Fallback instructor if a trainer has no qualification saved. */
   INSTRUCTOR: { name: "Cormac Farrell", title: "Manual Handling Instructor", qual: "QQI Level 6" }
 };
 const THEME = { primary:'#005C9C', secondary:'#0077C8', lightBg:'#F1F6FA' };
@@ -126,7 +128,9 @@ const I={
   out:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg>,
   trash:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>,
   lock:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>,
-  check:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>
+  check:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>,
+  left:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
+  right:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
 };
 const roleLabel=(r)=> r==='superadmin'?'Super admin':r==='admin'?'Admin':'Trainer';
 const Badge=({children,tone})=>{ const m={green:'bg-emerald-100 text-emerald-700',amber:'bg-amber-100 text-amber-700',red:'bg-red-100 text-red-700',slate:'bg-slate-100 text-slate-600',blue:'bg-sky-100 text-sky-700'}; return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${m[tone]||m.slate}`}>{children}</span>; };
@@ -196,7 +200,7 @@ function App(){
         <div className="max-w-6xl mx-auto px-4 flex gap-2 h-12 items-center">
           {isAdmin && <NavBtn id="dashboard" icon={<I.grid size={17}/>} label="Dashboard" />}
           <NavBtn id="give" icon={<I.cert size={17}/>} label="Give training" />
-          {isAdmin && <NavBtn id="schedule" icon={<I.cal size={17}/>} label="Schedule" />}
+          {isAdmin && <NavBtn id="schedule" icon={<I.cal size={17}/>} label="Plan Schedule" />}
           {isAdmin && <NavBtn id="employees" icon={<I.users size={17}/>} label="Employees" />}
           {isAdmin && <NavBtn id="people" icon={<I.user size={17}/>} label="Logins" />}
         </div>
@@ -253,6 +257,80 @@ function Login({ t, onLogin }){
   );
 }
 
+/* ---------------- Trainer Calendar View ---------------- */
+function TrainerCalendar({ t, schedule, courses, onRun }){
+  const [baseDate, setBaseDate] = useState(new Date());
+  const [selDate, setSelDate] = useState(todayISO());
+
+  const nextMonth = () => setBaseDate(new Date(baseDate.getFullYear(), baseDate.getMonth() + 1, 1));
+  const prevMonth = () => setBaseDate(new Date(baseDate.getFullYear(), baseDate.getMonth() - 1, 1));
+
+  const y = baseDate.getFullYear();
+  const m = baseDate.getMonth();
+  const firstDay = new Date(y, m, 1).getDay();
+  const days = new Date(y, m + 1, 0).getDate();
+
+  const sMap = {};
+  schedule.forEach(s => {
+    if(!sMap[s.date]) sMap[s.date] = [];
+    sMap[s.date].push(s);
+  });
+
+  const cells = [];
+  for(let i=0; i<firstDay; i++) cells.push(<div key={`e${i}`} className="p-2 opacity-0 pointer-events-none"></div>);
+  for(let i=1; i<=days; i++){
+    const dStr = `${y}-${String(m+1).padStart(2,'0')}-${String(i).padStart(2,'0')}`;
+    const hasJobs = !!sMap[dStr];
+    const isSel = selDate === dStr;
+    cells.push(
+      <div key={i} onClick={()=>setSelDate(dStr)} className={`p-2 border rounded-lg cursor-pointer transition flex flex-col items-center justify-center h-12 ${isSel?'ring-2 ring-blue-500 bg-blue-50':hasJobs?'bg-emerald-50 border-emerald-200 hover:bg-emerald-100':'border-slate-100 hover:bg-slate-50'}`}>
+        <p className={`text-sm font-semibold ${hasJobs?'text-emerald-700':'text-slate-600'}`}>{i}</p>
+        {hasJobs && <div className="mt-1 w-1.5 h-1.5 bg-emerald-500 rounded-full"></div>}
+      </div>
+    );
+  }
+
+  const dayJobs = sMap[selDate] || [];
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-6 items-start fade mb-8">
+      <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
+         <div className="flex justify-between items-center mb-4">
+            <h2 className="font-bold text-lg text-slate-800 flex items-center gap-2"><I.cal size={18} style={{color:t.primary}}/> {baseDate.toLocaleString('default',{month:'long'})} {y}</h2>
+            <div className="flex gap-2">
+               <button onClick={prevMonth} className="p-1 hover:bg-slate-100 rounded text-slate-500 transition"><I.left size={20}/></button>
+               <button onClick={nextMonth} className="p-1 hover:bg-slate-100 rounded text-slate-500 transition"><I.right size={20}/></button>
+            </div>
+         </div>
+         <div className="grid grid-cols-7 gap-1 text-center text-xs font-semibold text-slate-400 mb-2">
+           <div>Su</div><div>Mo</div><div>Tu</div><div>We</div><div>Th</div><div>Fr</div><div>Sa</div>
+         </div>
+         <div className="grid grid-cols-7 gap-1">{cells}</div>
+      </div>
+
+      <div className="bg-white p-5 rounded-xl shadow-sm border border-slate-200 min-h-[310px]">
+         <h3 className="font-bold text-slate-800 mb-4">{fmtUK(selDate)} Agenda</h3>
+         {dayJobs.length===0 ? <p className="text-slate-400 text-sm italic">No site visits scheduled for this day.</p> : (
+           <div className="space-y-3">
+             {dayJobs.map(j => {
+                // FIXED: loose equality to match numeric/string IDs
+                const cObj = courses.find(c=>c.id == j.course || c.name == j.course);
+                const cName = cObj ? cObj.name : j.course;
+                return (
+                  <div key={j.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50 hover:bg-slate-100 transition">
+                    <p className="font-bold text-slate-800 text-lg">{j.site}</p>
+                    <p className="text-sm font-medium text-slate-600 mb-3">{cName}</p>
+                    <button onClick={()=>onRun(j)} style={{backgroundColor:t.primary}} className="text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:brightness-110 transition shadow-sm w-full">Run session</button>
+                  </div>
+                )
+             })}
+           </div>
+         )}
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- Give training ---------------- */
 function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, reloadCourses }){
   const [schedId,setSchedId]=useState(null);
@@ -268,7 +346,10 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   const [courseMsg,setCourseMsg]=useState(null);
 
   useEffect(()=>{
-    if((!type || !typeList.find(x=>x.id===type)) && typeList.length) { setType(typeList[0].id); }
+    // FIXED: use loose equality
+    if((!type || !typeList.find(x=>x.id == type)) && typeList.length) {
+      setType(typeList[0].id);
+    }
   }, [courses, type]);
 
   const addCourse=async()=>{
@@ -292,9 +373,10 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   };
 
   const runSession=(sess)=>{ 
-    const courseObj = courses.find(c => c.id === sess.course || c.name === sess.course);
-    if(courseObj) setType(courseObj.id);
-    else if (courses.length > 0) setType(courses[0].id);
+    // FIXED: loose equality & store ID as string for consistency
+    const courseObj = courses.find(c => c.id == sess.course || c.name == sess.course);
+    if(courseObj) setType(String(courseObj.id));
+    else if (courses.length > 0) setType(String(courses[0].id));
     
     setDate(sess.date); 
     setSchedId(sess.id); 
@@ -313,7 +395,8 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   const issue=async()=>{
     if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
     
-    const courseObj = courses.find(c => c.id === type);
+    // FIXED: loose equality
+    const courseObj = courses.find(c => c.id == type);
     const actualCourseName = courseObj ? courseObj.name : 'Training';
     
     if(!window.confirm('Issue '+actualCourseName+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
@@ -361,47 +444,27 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   return (
     <div className="space-y-6 fade">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-slate-900">Give training</h1>
-        {isAdmin && <button onClick={()=>setShowCourses(v=>!v)} className="text-sm font-semibold" style={{color:t.primary}}>{showCourses?'Done':'Manage courses'}</button>}
+        <h1 className="text-2xl font-bold text-slate-900">{isAdmin ? 'Give training' : 'My Schedule'}</h1>
+        {isAdmin && <button onClick={()=>setShowCourses(v=>!v)} className="text-sm font-semibold hover:opacity-80 transition" style={{color:t.primary}}>{showCourses?'Done':'Manage courses'}</button>}
       </div>
       
-      {mySchedule.length > 0 && (
-        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3 shadow-sm">
-          <h2 className="font-bold text-slate-800 flex items-center gap-2"><I.cal size={18} style={{color:t.primary}}/> My Upcoming Schedule</h2>
-          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-            {mySchedule.map(s=>{
-               const cObj = courses.find(c => c.id === s.course || c.name === s.course);
-               const cName = cObj ? cObj.name : s.course;
-               return (
-                 <div key={s.id} className="border border-slate-200 rounded-lg p-3.5 flex flex-col justify-between gap-3 bg-slate-50 hover:bg-slate-100 transition">
-                   <div>
-                     <p className="font-bold text-slate-800 text-base">{s.site}</p>
-                     <p className="text-sm font-medium text-slate-600 mt-0.5">{cName}</p>
-                     <p className="text-xs text-slate-500 mt-1.5 flex items-center gap-1.5"><I.cal size={13}/> {fmtUK(s.date)}</p>
-                   </div>
-                   <button onClick={()=>runSession(s)} style={{backgroundColor:t.primary}} className="text-white text-xs font-semibold px-3 py-2 rounded-lg w-full hover:brightness-110 shadow-sm transition">Run session</button>
-                 </div>
-               )
-            })}
-          </div>
-        </div>
-      )}
+      {!isAdmin && <TrainerCalendar t={t} schedule={mySchedule} courses={courses} onRun={runSession} />}
 
       {isAdmin && showCourses && (
         <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3">
           <h2 className="font-bold text-slate-800">Training courses</h2>
           <div className="flex gap-2 items-center">
-            <input disabled={courseBusy} value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course (e.g. Fire Safety)" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-            <input disabled={courseBusy} type="number" min="1" value={newCourseDur} onChange={e=>setNewCourseDur(e.target.value)} placeholder="Months valid" title="Duration in months" className="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+            <input disabled={courseBusy} value={newCourse} onChange={e=>setNewCourse(e.target.value)} placeholder="New course (e.g. Fire Safety)" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
+            <input disabled={courseBusy} type="number" min="1" value={newCourseDur} onChange={e=>setNewCourseDur(e.target.value)} placeholder="Months valid" title="Duration in months" className="w-32 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
             <span className="text-sm text-slate-500 font-medium hidden sm:inline">months</span>
-            <button disabled={courseBusy} onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm ml-2 disabled:opacity-60">{courseBusy?'...':'Add'}</button>
+            <button disabled={courseBusy} onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm ml-2 disabled:opacity-60 transition">{courseBusy?'...':'Add'}</button>
           </div>
           {courseMsg && <p className={`text-sm font-medium ${courseMsg.bad?'text-red-600':'text-emerald-600'}`}>{courseMsg.text}</p>}
           <div className="flex flex-wrap gap-2 pt-2">
             {typeList.map(c=>
               <span key={c.id} className={`flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 opacity-90 ${courseDelBusy===c.id?'pointer-events-none opacity-50':''}`}>
                 {c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span>
-                <button disabled={courseDelBusy===c.id} onClick={()=>delCourse(c.id)} className="text-slate-400 hover:text-red-500 px-1 font-bold disabled:opacity-50">{courseDelBusy===c.id ? '...' : '\u00D7'}</button>
+                <button disabled={courseDelBusy===c.id} onClick={()=>delCourse(c.id)} className="text-slate-400 hover:text-red-500 px-1 font-bold disabled:opacity-50 transition">{courseDelBusy===c.id ? '...' : '\u00D7'}</button>
               </span>
             )}
           </div>
@@ -409,13 +472,13 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
       )}
 
       <div id="issue-panel" className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-        <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100">
+        <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100 bg-slate-50/50">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training type</label>
-            <select value={type} onChange={e=>setType(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white">
+            <select value={type} onChange={e=>setType(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}>
               {typeList.map(x=><option key={x.id} value={x.id}>{x.name} ({x.duration} months)</option>)}
             </select></div>
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training date</label>
-            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5" /></div>
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
           <div className="flex items-end"><button onClick={issue} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Working...':`Issue ${chosen.length||''} cert${chosen.length===1?'':'s'}`}</button></div>
         </div>
         <div className="p-4 flex items-center gap-3 border-b border-slate-100">
@@ -449,7 +512,8 @@ function Schedule({ t, courses, schedule, users, reload }){
   const [delBusy,setDelBusy]=useState(null);
 
   useEffect(()=>{ 
-    if(!course && courses.length) setCourse(courses[0].id); 
+    // FIXED: store as string for consistency
+    if(!course && courses.length) setCourse(String(courses[0].id)); 
     if(!trainer && users.length) setTrainer(users[0].username);
   },[courses, users]);
 
@@ -478,7 +542,7 @@ function Schedule({ t, courses, schedule, users, reload }){
   
   return (
     <div className="space-y-6 fade">
-      <h1 className="text-2xl font-bold text-slate-900">Schedule a session</h1>
+      <h1 className="text-2xl font-bold text-slate-900">Plan Schedule</h1>
       <p className="text-slate-600 -mt-4 text-sm">Assign a trainer to visit a site. The trainer will log in, see their schedule, and select the attendees on the day.</p>
       
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
@@ -510,7 +574,8 @@ function Schedule({ t, courses, schedule, users, reload }){
           {planned.length===0 && <li className="p-6 text-slate-400 italic">Nothing planned.</li>}
           {planned.map(s=>{
             const trainerName = users.find(u=>u.username===s.trainer)?.name || s.trainer;
-            const courseObj = courses.find(c=>c.id===s.course || c.name===s.course);
+            // FIXED: loose equality to match course ID
+            const courseObj = courses.find(c=>c.id == s.course || c.name == s.course);
             const displayCourse = courseObj ? `${courseObj.name} (${courseObj.duration}m)` : s.course;
             
             return (
