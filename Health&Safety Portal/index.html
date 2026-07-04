@@ -27,7 +27,7 @@ window.addEventListener('error', function(e){
 
 <script type="text/plain" id="appsrc">
 /* eslint-disable */
-const { useState, useEffect } = React;
+const { useState, useEffect, useRef } = React;
 
 /* ===== CONFIG ===== */
 const CONFIG = {
@@ -35,7 +35,7 @@ const CONFIG = {
   LOGO_URL: "https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp",
   CERT_FILE: "Cert.txt",
   /* Training fallback if sheet is empty. */
-  TRAINING_TYPES: [ {id: "1", name: "Manual Handling", duration: 36} ],
+  TRAINING_TYPES: [ {id: "Manual Handling", name: "Manual Handling", duration: 36} ],
   /* Fallback instructor if a trainer has no qualification saved. */
   INSTRUCTOR: { name: "Cormac Farrell", title: "Manual Handling Instructor", qual: "QQI Level 6" }
 };
@@ -47,6 +47,7 @@ const store = {
   del(k){ try{localStorage.removeItem(k);}catch(e){} }
 };
 const SESS='ifes_session';
+const BOOT_CACHE='ifes_boot_cache';
 let BACKEND_CODE=(function(){ try{return JSON.parse(localStorage.getItem('backend_code'))||'';}catch(e){return '';} })();
 const backendReady=()=>BACKEND_CODE.length>0;
 const backendUrl=()=>CONFIG.BACKEND_PREFIX+BACKEND_CODE+"/exec";
@@ -69,12 +70,20 @@ const daysUntil=(iso)=>{ if(!iso)return null; return Math.ceil((new Date(iso)-ne
 const genPassword=()=>{ const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<8;i++)s+=c[Math.floor(Math.random()*c.length)]; return s; };
 const safeName=(n)=>String(n).replace(/[^A-Za-z0-9]+/g,'_');
 
+/* Courses come from the sheet as {name, duration}. Normalise them so the
+   name doubles as a stable id, and flag any course whose name contains
+   the word audit as a no-certificate audit type. */
+const normCourses=(list)=>(list||[]).map(c=>({
+  id:String(c.name), name:c.name, duration:c.duration, audit:/audit/i.test(String(c.name))
+}));
+
 function errText(r){
   if(!r) return 'No reply from the server.';
   if(r.error==='unknown_action') return 'Your backend is running an OLD version. In Apps Script: Deploy > Manage deployments > pencil > Version: New version > Deploy.';
   if(r.error==='auth') return 'Your session expired. Log out and back in.';
   if(r.error==='forbidden') return 'Your login does not have permission for that.';
   if(r.error==='exists') return 'That one already exists.';
+  if(r.error==='no_qual') return 'Your login has no qualification saved, so you cannot issue certificates. Ask an admin to add it on the Logins tab.';
   if(r.error==='system_busy') return r.message;
   if(r.message) return r.message;
   return 'Server said: '+(r.error||'unknown error');
@@ -129,6 +138,7 @@ const I={
   trash:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14"/></svg>,
   lock:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V8a4 4 0 018 0v3"/></svg>,
   check:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 6L9 17l-5-5"/></svg>,
+  clip:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="5" y="4" width="14" height="17" rx="2"/><path d="M9 4a3 3 0 016 0"/><path d="M9 11l2 2 4-4"/></svg>,
   left:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M15 18l-6-6 6-6"/></svg>,
   right:(p)=><svg {...p} width={p.size||20} height={p.size||20} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M9 18l6-6-6-6"/></svg>
 };
@@ -148,11 +158,29 @@ function App(){
   const [courses,setCourses]=useState([]);
   const [schedule,setSchedule]=useState([]);
   const [showPw,setShowPw]=useState(false);
+  const skipNextLoad=useRef(false);
   const isAdmin=me&&(me.role==='admin'||me.role==='superadmin');
+
+  /* Apply a bootstrap payload to state and cache it for instant startup next time. */
+  const applyBoot=(r)=>{
+    setEmployees(r.employees||[]); setTraining(r.training||[]);
+    setCourses(normCourses(r.courses||[])); setSchedule(r.schedule||[]);
+    if(r.users)setUsers(r.users);
+    store.set(BOOT_CACHE,{employees:r.employees||[],training:r.training||[],courses:r.courses||[],schedule:r.schedule||[],users:r.users||null});
+  };
 
   useEffect(()=>{ (async()=>{
     const sess=store.get(SESS);
-    if(sess&&sess.token&&sess.me&&backendReady()){ setMe(Object.assign({token:sess.token},sess.me)); }
+    if(sess&&sess.token&&sess.me&&backendReady()){
+      /* Show the last known data instantly, then refresh in the background. */
+      const cache=store.get(BOOT_CACHE);
+      if(cache){
+        setEmployees(cache.employees||[]); setTraining(cache.training||[]);
+        setCourses(normCourses(cache.courses||[])); setSchedule(cache.schedule||[]);
+        if(cache.users)setUsers(cache.users);
+      }
+      setMe(Object.assign({token:sess.token},sess.me));
+    }
     setReady(true);
   })(); },[]);
 
@@ -162,19 +190,31 @@ function App(){
     try{
       const r=await api('bootstrap',{token:tk});
       if(r.ok){
-        setEmployees(r.employees||[]); setTraining(r.training||[]); setCourses(r.courses||[]); setSchedule(r.schedule||[]); if(r.users)setUsers(r.users);
+        applyBoot(r);
         if(r.qual!==undefined && r.qual!==me.qual){ const upd=Object.assign({},me,{qual:r.qual}); setMe(upd); store.set(SESS,{token:upd.token,me:{username:upd.username,name:upd.name,role:upd.role,qual:upd.qual}}); }
         setLoadErr('');
       }
       else setLoadErr(errText(r));
     }catch(e){ setLoadErr('Could not reach the server.'); }
   };
-  
-  const meToken = me ? me.token : null;
-  useEffect(()=>{ if(me){ setTab(isAdmin?'dashboard':'give'); loadData(); } },[meToken]);
 
-  const onLogin=(d)=>{ store.set(SESS,{token:d.token,me:{username:d.username,name:d.name,role:d.role,qual:d.qual||''}}); setMe(d); };
-  const logout=()=>{ store.del(SESS); setMe(null); setUsers([]); setEmployees([]); setTraining([]); };
+  const meToken = me ? me.token : null;
+  useEffect(()=>{ if(me){ setTab(isAdmin?'dashboard':'give'); if(skipNextLoad.current){ skipNextLoad.current=false; } else loadData(); } },[meToken]);
+
+  const onLogin=(d)=>{
+    store.set(SESS,{token:d.token,me:{username:d.username,name:d.name,role:d.role,qual:d.qual||''}});
+    if(d.data){ applyBoot(d.data); skipNextLoad.current=true; }
+    setMe({token:d.token,username:d.username,name:d.name,role:d.role,qual:d.qual||''});
+  };
+  const logout=()=>{ store.del(SESS); store.del(BOOT_CACHE); setMe(null); setUsers([]); setEmployees([]); setTraining([]); setSchedule([]); };
+
+  /* Optimistic local updates: rows disappear instantly, server confirms in the background. */
+  const patch={
+    removeEmployee:(id)=>setEmployees(l=>l.filter(x=>x.id!==id)),
+    removeUser:(un)=>setUsers(l=>l.filter(x=>x.username!==un)),
+    removeTraining:(id)=>setTraining(l=>l.filter(x=>x.id!==id)),
+    removeSchedule:(id)=>setSchedule(l=>l.filter(x=>x.id!==id))
+  };
 
   if(!ready) return <div className="min-h-screen flex items-center justify-center text-slate-400">Loading...</div>;
   if(!me) return <Login t={t} onLogin={onLogin} />;
@@ -207,11 +247,11 @@ function App(){
       </nav>
       <main className="max-w-6xl mx-auto px-4 py-8">
         {loadErr && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{loadErr}</div>}
-        {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} onDelete={loadData} me={me} />}
+        {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} onDelete={loadData} patch={patch} me={me} />}
         {tab==='give' && <GiveTraining t={t} me={me} employees={employees} courses={courses} schedule={schedule} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
-        {tab==='schedule' && isAdmin && <Schedule t={t} courses={courses} schedule={schedule} users={users} reload={loadData} />}
-        {tab==='employees' && isAdmin && <Employees t={t} employees={employees} reload={loadData} />}
-        {tab==='people' && isAdmin && <People t={t} me={me} users={users} reload={loadData} />}
+        {tab==='schedule' && isAdmin && <Schedule t={t} courses={courses} schedule={schedule} users={users} reload={loadData} patch={patch} />}
+        {tab==='employees' && isAdmin && <Employees t={t} employees={employees} reload={loadData} patch={patch} />}
+        {tab==='people' && isAdmin && <People t={t} me={me} users={users} reload={loadData} patch={patch} />}
       </main>
       {showPw && <ChangePassword t={t} onClose={()=>setShowPw(false)} />}
     </div>
@@ -227,7 +267,7 @@ function Login({ t, onLogin }){
       if(CONFIG.BACKEND_PREFIX.indexOf('http')!==0){ setErr('Backend not set up in the app yet.'); setBusy(false); return; }
       if(needCode){ if(!code.trim()){ setErr('Enter your access code.'); setBusy(false); return; } BACKEND_CODE=code.trim(); }
       const r=await api('login',{username:username.trim(),password});
-      if(r.ok){ store.set('backend_code',BACKEND_CODE); onLogin({username:r.username,name:r.name,role:r.role,qual:r.qual||'',token:r.token}); }
+      if(r.ok){ store.set('backend_code',BACKEND_CODE); onLogin({username:r.username,name:r.name,role:r.role,qual:r.qual||'',token:r.token,data:r.data||null}); }
       else setErr('Wrong username or password.');
     }catch(e){ if(e&&e.code==='bad_endpoint'){ setErr('That access code does not match. Check the last 12 characters.'); if(needCode)BACKEND_CODE=''; } else setErr('Could not reach the server. Check your internet connection.'); }
     finally{ setBusy(false); }
@@ -272,8 +312,9 @@ function TrainerCalendar({ t, schedule, courses, onRun }){
 
   const sMap = {};
   schedule.forEach(s => {
-    if(!sMap[s.date]) sMap[s.date] = [];
-    sMap[s.date].push(s);
+    const key = String(s.date).slice(0,10);
+    if(!sMap[key]) sMap[key] = [];
+    sMap[key].push(s);
   });
 
   const cells = [];
@@ -313,14 +354,13 @@ function TrainerCalendar({ t, schedule, courses, onRun }){
          {dayJobs.length===0 ? <p className="text-slate-400 text-sm italic">No site visits scheduled for this day.</p> : (
            <div className="space-y-3">
              {dayJobs.map(j => {
-                // FIXED: loose equality to match numeric/string IDs
                 const cObj = courses.find(c=>c.id == j.course || c.name == j.course);
                 const cName = cObj ? cObj.name : j.course;
                 return (
                   <div key={j.id} className="border border-slate-200 rounded-lg p-4 bg-slate-50 hover:bg-slate-100 transition">
                     <p className="font-bold text-slate-800 text-lg">{j.site}</p>
-                    <p className="text-sm font-medium text-slate-600 mb-3">{cName}</p>
-                    <button onClick={()=>onRun(j)} style={{backgroundColor:t.primary}} className="text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:brightness-110 transition shadow-sm w-full">Run session</button>
+                    <p className="text-sm font-medium text-slate-600 mb-3">{cName} {cObj&&cObj.audit?<Badge tone="blue">Audit</Badge>:null}</p>
+                    <button onClick={()=>onRun(j)} style={{backgroundColor:t.primary}} className="text-white text-xs font-semibold px-4 py-2.5 rounded-lg hover:brightness-110 transition shadow-sm w-full">{cObj&&cObj.audit?'Run audit':'Run session'}</button>
                   </div>
                 )
              })}
@@ -346,7 +386,6 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   const [courseMsg,setCourseMsg]=useState(null);
 
   useEffect(()=>{
-    // FIXED: use loose equality
     if((!type || !typeList.find(x=>x.id == type)) && typeList.length) {
       setType(typeList[0].id);
     }
@@ -359,32 +398,34 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
     const tk=store.get(SESS).token;
     const r=await api('addCourse',{token:tk, name:n, duration:newCourseDur});
     setCourseBusy(false);
-    if(r.ok){ setNewCourse(''); setNewCourseDur(12); reloadCourses(); setType(r.id); setCourseMsg({bad:false,text:'Course added.'}); }
+    if(r.ok){ setNewCourse(''); setNewCourseDur(12); reloadCourses(); setType(n); setCourseMsg({bad:false,text:/audit/i.test(n)?'Audit type added. It will not create certificates.':'Course added.'}); }
     else setCourseMsg({bad:true,text:errText(r)});
   };
   const delCourse=async(id)=>{
     if(!window.confirm('Remove this course?'))return;
     setCourseDelBusy(id); setCourseMsg(null);
     const tk=store.get(SESS).token;
-    const r=await api('deleteCourse',{token:tk,id:id});
+    const r=await api('deleteCourse',{token:tk,name:id});
     setCourseDelBusy(null);
     if(r.ok){ reloadCourses(); setCourseMsg({bad:false,text:'Course removed.'}); }
     else setCourseMsg({bad:true,text:errText(r)});
   };
 
-  const runSession=(sess)=>{ 
-    // FIXED: loose equality & store ID as string for consistency
-    const courseObj = courses.find(c => c.id == sess.course || c.name == sess.course);
-    if(courseObj) setType(String(courseObj.id));
+  const runSession=(sess)=>{
+    const courseObjS = courses.find(c => c.id == sess.course || c.name == sess.course);
+    if(courseObjS) setType(String(courseObjS.id));
     else if (courses.length > 0) setType(String(courses[0].id));
-    
-    setDate(sess.date); 
-    setSchedId(sess.id); 
-    setMsg({bad:false,text:'Session loaded: '+(courseObj?courseObj.name:sess.course)+' at '+sess.site+' on '+fmtUK(sess.date)+'. Tick the people who attended and press Issue.'}); 
+
+    setDate(String(sess.date).slice(0,10));
+    setSite(sess.site||'');
+    setSchedId(sess.id);
+    const isAud = courseObjS && courseObjS.audit;
+    setMsg({bad:false,text:'Session loaded: '+(courseObjS?courseObjS.name:sess.course)+' at '+sess.site+' on '+fmtUK(sess.date)+'. '+(isAud?'Add any notes and press Complete audit when done.':'Tick the people who attended and press Issue.')});
     window.scrollTo({ top: document.getElementById('issue-panel').offsetTop - 20, behavior: 'smooth' });
   };
 
   const [date,setDate]=useState(todayISO()); const [q,setQ]=useState('');
+  const [site,setSite]=useState(''); const [notes,setNotes]=useState('');
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(null);
   const active=employees.filter(e=>e.active!==false);
   const list=active.filter(e=>!q||String(e.name).toLowerCase().includes(q.toLowerCase()));
@@ -392,13 +433,16 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   const toggle=(id)=>setSel(s=>Object.assign({},s,{[id]:!s[id]}));
   const allShown=(v)=>{ const n=Object.assign({},sel); list.forEach(e=>n[e.id]=v); setSel(n); };
 
+  const courseObj=typeList.find(c=>c.id==type);
+  const isAudit=!!(courseObj&&courseObj.audit);
+  const hasQual=!!(me&&me.qual&&String(me.qual).trim());
+  const certBlocked=!isAudit&&!hasQual;
+
   const issue=async()=>{
     if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
-    
-    // FIXED: loose equality
-    const courseObj = courses.find(c => c.id == type);
+
     const actualCourseName = courseObj ? courseObj.name : 'Training';
-    
+
     if(!window.confirm('Issue '+actualCourseName+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
     setBusy(true); setMsg({bad:false,text:'Generating and emailing certificates...'});
     try{
@@ -409,7 +453,7 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
 
       const instructorName = (me && me.name) || CONFIG.INSTRUCTOR.name;
       const instructorTitle = actualCourseName + ' Instructor';
-      const instructorQual = (me && me.qual) || ''; 
+      const instructorQual = (me && me.qual) || '';
 
       for(const e of chosen){
         const issueDate=todayISO();
@@ -439,6 +483,23 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
     finally{ setBusy(false); }
   };
 
+  const doAudit=async()=>{
+    if(!site.trim()){ setMsg({bad:true,text:'Enter the site for this audit.'}); return; }
+    const actualName = courseObj ? courseObj.name : 'Audit';
+    if(!window.confirm('Mark '+actualName+' complete at '+site.trim()+'?\n\nA confirmation email goes to the office and to you. No certificates are issued.')) return;
+    setBusy(true); setMsg({bad:false,text:'Recording audit...'});
+    try{
+      const tk=store.get(SESS).token;
+      const r=await api('recordAudit',{token:tk,course:actualName,site:site.trim(),date,notes:notes.trim()});
+      if(r&&r.ok){
+        setMsg({bad:false,text:'Audit recorded'+(r.emailed?' and emailed to the office and auditor.':'. (Warning: the email could not be sent.)')});
+        if(schedId){ await api('completeSchedule',{token:tk,id:schedId}); setSchedId(null); }
+        setSite(''); setNotes(''); onIssued&&onIssued();
+      } else setMsg({bad:true,text:errText(r)});
+    }catch(e){ setMsg({bad:true,text:'Could not reach the server.'}); }
+    finally{ setBusy(false); }
+  };
+
   const mySchedule = (schedule||[]).filter(s=>s.status!=='Done' && s.trainer===me.username).sort((a,b)=>new Date(a.date)-new Date(b.date));
 
   return (
@@ -447,7 +508,7 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
         <h1 className="text-2xl font-bold text-slate-900">{isAdmin ? 'Give training' : 'My Schedule'}</h1>
         {isAdmin && <button onClick={()=>setShowCourses(v=>!v)} className="text-sm font-semibold hover:opacity-80 transition" style={{color:t.primary}}>{showCourses?'Done':'Manage courses'}</button>}
       </div>
-      
+
       {!isAdmin && <TrainerCalendar t={t} schedule={mySchedule} courses={courses} onRun={runSession} />}
 
       {isAdmin && showCourses && (
@@ -459,11 +520,12 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
             <span className="text-sm text-slate-500 font-medium hidden sm:inline">months</span>
             <button disabled={courseBusy} onClick={addCourse} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm ml-2 disabled:opacity-60 transition">{courseBusy?'...':'Add'}</button>
           </div>
+          <p className="text-xs text-slate-400">Tip: include the word audit in the name (e.g. Site Audit) to make it an audit type. Audits email the office and the auditor, and do not create certificates.</p>
           {courseMsg && <p className={`text-sm font-medium ${courseMsg.bad?'text-red-600':'text-emerald-600'}`}>{courseMsg.text}</p>}
           <div className="flex flex-wrap gap-2 pt-2">
             {typeList.map(c=>
               <span key={c.id} className={`flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 opacity-90 ${courseDelBusy===c.id?'pointer-events-none opacity-50':''}`}>
-                {c.name} <span className="text-slate-400 text-xs">({c.duration}m)</span>
+                {c.name} <span className="text-slate-400 text-xs">{c.audit?'(audit)':`(${c.duration}m)`}</span>
                 <button disabled={courseDelBusy===c.id} onClick={()=>delCourse(c.id)} className="text-slate-400 hover:text-red-500 px-1 font-bold disabled:opacity-50 transition">{courseDelBusy===c.id ? '...' : '\u00D7'}</button>
               </span>
             )}
@@ -473,47 +535,65 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
 
       <div id="issue-panel" className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-5 grid sm:grid-cols-3 gap-4 border-b border-slate-100 bg-slate-50/50">
-          <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training type</label>
+          <div><label className="block text-xs font-semibold text-slate-600 mb-1">{isAudit?'Audit type':'Training type'}</label>
             <select value={type} onChange={e=>setType(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}>
-              {typeList.map(x=><option key={x.id} value={x.id}>{x.name} ({x.duration} months)</option>)}
+              {typeList.map(x=><option key={x.id} value={x.id}>{x.name} {x.audit?'(audit)':`(${x.duration} months)`}</option>)}
             </select></div>
-          <div><label className="block text-xs font-semibold text-slate-600 mb-1">Training date</label>
+          <div><label className="block text-xs font-semibold text-slate-600 mb-1">{isAudit?'Audit date':'Training date'}</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
-          <div className="flex items-end"><button onClick={issue} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Working...':`Issue ${chosen.length||''} cert${chosen.length===1?'':'s'}`}</button></div>
+          <div className="flex items-end"><button onClick={isAudit?doAudit:issue} disabled={busy||certBlocked} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Working...':(isAudit?'Complete audit':`Issue ${chosen.length||''} cert${chosen.length===1?'':'s'}`)}</button></div>
         </div>
-        <div className="p-4 flex items-center gap-3 border-b border-slate-100">
-          <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search people" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
-          <button onClick={()=>allShown(true)} className="text-sm font-semibold hover:opacity-80 transition" style={{color:t.primary}}>Select all</button>
-          <button onClick={()=>allShown(false)} className="text-sm text-slate-500 hover:text-slate-800 transition">Clear</button>
-        </div>
-        {msg && <p className={`px-5 pt-3 text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
-        <ul className="divide-y divide-slate-100 max-h-96 overflow-auto">
-          {active.length===0 && <li className="p-6 text-slate-400 italic">No employees yet. Add them on the Employees tab.</li>}
-          {list.map(e=>(
-            <li key={e.id} className="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50 transition" onClick={()=>toggle(e.id)}>
-              <input type="checkbox" checked={!!sel[e.id]} readOnly className="w-4 h-4 pointer-events-none" />
-              <div><p className="font-medium text-slate-800 text-sm">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div>
-            </li>
-          ))}
-        </ul>
+        {certBlocked && (
+          <div className="px-5 py-3 border-b border-amber-100 bg-amber-50 text-amber-800 text-sm font-medium flex items-center gap-2">
+            <I.lock size={15}/> Your login has no qualification saved, so you cannot issue certificates. Ask an admin to add it on the Logins tab. Audits are still available.
+          </div>
+        )}
+        {isAudit && (
+          <div className="p-5 space-y-3 border-b border-slate-100">
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Site / Location</label>
+                <input value={site} onChange={e=>setSite(e.target.value)} placeholder="e.g. Building A" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Notes (optional, included in the email)</label>
+                <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any findings or comments" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+            </div>
+            <p className="text-xs text-slate-400 flex items-center gap-1.5"><I.clip size={14}/> No certificates are issued for audits. A confirmation email goes to the office and to you.</p>
+          </div>
+        )}
+        {!isAudit && (
+          <div className="p-4 flex items-center gap-3 border-b border-slate-100">
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search people" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
+            <button onClick={()=>allShown(true)} className="text-sm font-semibold hover:opacity-80 transition" style={{color:t.primary}}>Select all</button>
+            <button onClick={()=>allShown(false)} className="text-sm text-slate-500 hover:text-slate-800 transition">Clear</button>
+          </div>
+        )}
+        {msg && <p className={`px-5 py-3 text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
+        {!isAudit && (
+          <ul className="divide-y divide-slate-100 max-h-96 overflow-auto">
+            {active.length===0 && <li className="p-6 text-slate-400 italic">No employees yet. Add them on the Employees tab.</li>}
+            {list.map(e=>(
+              <li key={e.id} className="px-5 py-2.5 flex items-center gap-3 cursor-pointer hover:bg-slate-50 transition" onClick={()=>toggle(e.id)}>
+                <input type="checkbox" checked={!!sel[e.id]} readOnly className="w-4 h-4 pointer-events-none" />
+                <div><p className="font-medium text-slate-800 text-sm">{e.name}</p><p className="text-xs text-slate-400">{e.email||'no email'}</p></div>
+              </li>
+            ))}
+          </ul>
+        )}
       </div>
     </div>
   );
 }
 
 /* ---------------- Schedule (admin plans a session) ---------------- */
-function Schedule({ t, courses, schedule, users, reload }){
-  const [course,setCourse]=useState(''); 
+function Schedule({ t, courses, schedule, users, reload, patch }){
+  const [course,setCourse]=useState('');
   const [date,setDate]=useState(todayISO());
   const [site,setSite]=useState('');
   const [trainer,setTrainer]=useState('');
-  const [msg,setMsg]=useState(null); 
+  const [msg,setMsg]=useState(null);
   const [busy,setBusy]=useState(false);
-  const [delBusy,setDelBusy]=useState(null);
 
-  useEffect(()=>{ 
-    // FIXED: store as string for consistency
-    if(!course && courses.length) setCourse(String(courses[0].id)); 
+  useEffect(()=>{
+    if(!course && courses.length) setCourse(String(courses[0].id));
     if(!trainer && users.length) setTrainer(users[0].username);
   },[courses, users]);
 
@@ -521,7 +601,7 @@ function Schedule({ t, courses, schedule, users, reload }){
     if(!site.trim()){ setMsg({bad:true,text:'Enter a site location.'}); return; }
     if(!course){ setMsg({bad:true,text:'Pick a course.'}); return; }
     if(!trainer){ setMsg({bad:true,text:'Pick a trainer.'}); return; }
-    
+
     setBusy(true); setMsg({bad:false,text:'Saving session...'});
     const tk=store.get(SESS).token;
     const r=await api('addSchedule',{token:tk,course,date,site:site.trim(),trainer});
@@ -530,26 +610,26 @@ function Schedule({ t, courses, schedule, users, reload }){
     else setMsg({bad:true,text:errText(r)});
   };
 
-  const del=async(s)=>{ 
-    if(!window.confirm('Delete this planned session?'))return; 
-    setDelBusy(s.id);
-    const tk=store.get(SESS).token; 
-    await api('deleteSchedule',{token:tk,id:s.id}); 
-    setDelBusy(null); reload(); 
+  const del=async(s)=>{
+    if(!window.confirm('Delete this planned session?'))return;
+    patch.removeSchedule(s.id);
+    const tk=store.get(SESS).token;
+    const r=await api('deleteSchedule',{token:tk,id:s.id});
+    if(!r||!r.ok){ alert('Could not delete that session.'); reload(); }
   };
-  
+
   const planned=(schedule||[]).filter(s=>s.status!=='Done').sort((a,b)=>new Date(a.date)-new Date(b.date));
-  
+
   return (
     <div className="space-y-6 fade">
       <h1 className="text-2xl font-bold text-slate-900">Plan Schedule</h1>
       <p className="text-slate-600 -mt-4 text-sm">Assign a trainer to visit a site. The trainer will log in, see their schedule, and select the attendees on the day.</p>
-      
+
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-5 grid sm:grid-cols-2 gap-4 border-b border-slate-100 bg-slate-50/50">
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Site / Location</label>
             <input type="text" value={site} onChange={e=>setSite(e.target.value)} placeholder="e.g. Building A" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
-          
+
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Trainer</label>
             <select value={trainer} onChange={e=>setTrainer(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}>
               {users.map(u=><option key={u.username} value={u.username}>{u.name}</option>)}
@@ -557,12 +637,12 @@ function Schedule({ t, courses, schedule, users, reload }){
 
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Course</label>
             <select value={course} onChange={e=>setCourse(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}>
-              {courses.map(c=><option key={c.id} value={c.id}>{c.name} ({c.duration} months)</option>)}
+              {courses.map(c=><option key={c.id} value={c.id}>{c.name} {c.audit?'(audit)':`(${c.duration} months)`}</option>)}
             </select></div>
 
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Date</label>
             <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
-          
+
           <div className="sm:col-span-2 pt-2"><button onClick={save} disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-110 shadow-sm transition disabled:opacity-60">{busy?'Saving...':'Schedule session'}</button></div>
         </div>
         {msg && <p className={`px-5 py-4 text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
@@ -574,19 +654,16 @@ function Schedule({ t, courses, schedule, users, reload }){
           {planned.length===0 && <li className="p-6 text-slate-400 italic">Nothing planned.</li>}
           {planned.map(s=>{
             const trainerName = users.find(u=>u.username===s.trainer)?.name || s.trainer;
-            // FIXED: loose equality to match course ID
             const courseObj = courses.find(c=>c.id == s.course || c.name == s.course);
-            const displayCourse = courseObj ? `${courseObj.name} (${courseObj.duration}m)` : s.course;
-            
+            const displayCourse = courseObj ? (courseObj.audit ? `${courseObj.name} (audit)` : `${courseObj.name} (${courseObj.duration}m)`) : s.course;
+
             return (
-              <li key={s.id} className={`px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 transition ${delBusy===s.id?'opacity-50 pointer-events-none':''}`}>
+              <li key={s.id} className="px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 transition">
                 <div>
                   <p className="font-bold text-slate-800">{s.site} <span className="text-slate-500 font-medium text-sm ml-2">({displayCourse})</span></p>
-                  <p className="text-xs font-medium text-slate-500 mt-0.5"><span className="text-slate-400">{fmtUK(s.date)}</span> • Trainer: {trainerName}</p>
+                  <p className="text-xs font-medium text-slate-500 mt-0.5"><span className="text-slate-400">{fmtUK(s.date)}</span> &bull; Trainer: {trainerName}</p>
                 </div>
-                <button disabled={delBusy===s.id} onClick={()=>del(s)} className="text-slate-300 hover:text-red-500 transition p-2">
-                  {delBusy===s.id ? <span className="text-xs text-red-500 font-bold">Deleting...</span> : <I.trash size={18}/>}
-                </button>
+                <button onClick={()=>del(s)} className="text-slate-300 hover:text-red-500 transition p-2"><I.trash size={18}/></button>
               </li>
             );
           })}
@@ -598,14 +675,14 @@ function Schedule({ t, courses, schedule, users, reload }){
 
 /* ---------------- Dashboard ---------------- */
 function certState(row){
+  if(row.certSent==='audit') return {key:'audit',tone:'blue',label:'Audit'};
   if(!row.expiryDate) return {key:'unknown',tone:'slate',label:'-'};
   const d=daysUntil(row.expiryDate);
   if(d<0) return {key:'expired',tone:'red',label:'Expired'};
   if(d<=90) return {key:'soon',tone:'amber',label:'Expiring soon'};
   return {key:'valid',tone:'green',label:'Valid'};
 }
-function Dashboard({ t, training, onDelete, me }){
-  const [delBusy, setDelBusy] = useState(null);
+function Dashboard({ t, training, onDelete, patch, me }){
   const redl=async(r)=>{
     if(!window.confirm('Download the '+r.trainingType+' certificate for '+r.employee+'?'))return;
     try{ const b64=await loadCert(CONFIG.CERT_FILE);
@@ -617,12 +694,12 @@ function Dashboard({ t, training, onDelete, me }){
   const rows=training.map(r=>Object.assign({},r,{st:certState(r)}));
   const count=(k)=>rows.filter(r=>r.st.key===k).length;
   const shown=rows.filter(r=>!filter||String(r.employee).toLowerCase().includes(filter.toLowerCase())).sort((a,b)=>(a.expiryDate||'').localeCompare(b.expiryDate||''));
-  const del=async(r)=>{ 
-    if(!window.confirm('Delete this record for '+r.employee+'?'))return; 
-    setDelBusy(r.id);
-    const tk=store.get(SESS).token; 
-    await api('deleteTraining',{token:tk,id:r.id}); 
-    setDelBusy(null); onDelete&&onDelete(); 
+  const del=async(r)=>{
+    if(!window.confirm('Delete this record for '+r.employee+'?'))return;
+    patch.removeTraining(r.id);
+    const tk=store.get(SESS).token;
+    const rs=await api('deleteTraining',{token:tk,id:r.id});
+    if(!rs||!rs.ok){ alert('Could not delete that record.'); onDelete&&onDelete(); }
   };
   const cards=[['valid','Valid','text-emerald-600'],['soon','Expiring soon (90 days)','text-amber-600'],['expired','Expired','text-red-600']];
   return (
@@ -638,13 +715,13 @@ function Dashboard({ t, training, onDelete, me }){
           <tbody>
             {shown.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400 italic">No certificates yet.</td></tr>}
             {shown.map(r=>(
-              <tr key={r.id} className={`border-t border-slate-100 hover:bg-slate-50 transition ${delBusy===r.id?'opacity-50 pointer-events-none':''}`}>
+              <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50 transition">
                 <td className="px-4 py-3 font-bold text-slate-800">{r.employee}</td>
                 <td className="px-4 py-3 font-medium text-slate-600">{r.trainingType}</td>
                 <td className="px-4 py-3 text-slate-500">{fmtUK(r.trainingDate)||'-'}</td>
                 <td className="px-4 py-3 text-slate-500">{fmtUK(r.expiryDate)||'-'}</td>
                 <td className="px-4 py-3"><Badge tone={r.st.tone}>{r.st.label}</Badge></td>
-                <td className="px-4 py-3 text-right"><div className="flex items-center justify-end gap-3"><button onClick={()=>redl(r)} title="Download certificate" className="text-slate-400 hover:text-slate-700 transition"><I.down size={18}/></button>{me.role==='admin'||me.role==='superadmin' ? <button disabled={delBusy===r.id} onClick={()=>del(r)} className="text-slate-300 hover:text-red-500 transition">{delBusy===r.id ? <span className="text-xs text-red-500 font-bold">Deleting...</span> : <I.trash size={18}/>}</button> : null}</div></td>
+                <td className="px-4 py-3 text-right"><div className="flex items-center justify-end gap-3">{r.certSent==='audit'?null:<button onClick={()=>redl(r)} title="Download certificate" className="text-slate-400 hover:text-slate-700 transition"><I.down size={18}/></button>}{me.role==='admin'||me.role==='superadmin' ? <button onClick={()=>del(r)} className="text-slate-300 hover:text-red-500 transition"><I.trash size={18}/></button> : null}</div></td>
               </tr>
             ))}
           </tbody>
@@ -655,11 +732,10 @@ function Dashboard({ t, training, onDelete, me }){
 }
 
 /* ---------------- Employees (trainees) ---------------- */
-function Employees({ t, employees, reload }){
+function Employees({ t, employees, reload, patch }){
   const [name,setName]=useState(''); const [email,setEmail]=useState('');
   const [msg,setMsg]=useState(null); const [bulkMsg,setBulkMsg]=useState(null); const [busy,setBusy]=useState(false);
-  const [delBusy,setDelBusy]=useState(null);
-  
+
   const add=async(e)=>{ e.preventDefault(); if(!name.trim())return; setBusy(true); setMsg({bad:false,text:'Adding employee...'});
     const tk=store.get(SESS).token; const r=await api('addEmployee',{token:tk,employee:{name:name.trim(),email:email.trim()}}); setBusy(false);
     if(r.ok){ setName(''); setEmail(''); setMsg({bad:false,text:'Added.'}); reload(); } else setMsg({bad:true,text:errText(r)});
@@ -673,12 +749,12 @@ function Employees({ t, employees, reload }){
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); }
     e.target.value='';
   };
-  const del=async(emp)=>{ 
-    if(!window.confirm('Remove '+emp.name+'?'))return; 
-    setDelBusy(emp.id);
-    const tk=store.get(SESS).token; 
-    await api('deleteEmployee',{token:tk,id:emp.id}); 
-    setDelBusy(null); reload(); 
+  const del=async(emp)=>{
+    if(!window.confirm('Remove '+emp.name+'?'))return;
+    patch.removeEmployee(emp.id);
+    const tk=store.get(SESS).token;
+    const r=await api('deleteEmployee',{token:tk,id:emp.id});
+    if(!r||!r.ok){ alert('Could not remove '+emp.name+'.'); reload(); }
   };
   return (
     <div className="space-y-6 fade">
@@ -707,7 +783,7 @@ function Employees({ t, employees, reload }){
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All employees ({employees.length})</h2></div>
         <ul className="divide-y divide-slate-100">
           {employees.length===0 && <li className="p-6 text-slate-400 italic">None yet.</li>}
-          {employees.map(e=><li key={e.id} className={`px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 transition ${delBusy===e.id?'opacity-50 pointer-events-none':''}`}><div><p className="font-bold text-slate-800">{e.name}</p><p className="text-xs font-medium text-slate-500 mt-0.5">{e.email||'no email'}</p></div><button disabled={delBusy===e.id} onClick={()=>del(e)} className="text-slate-300 hover:text-red-500 transition p-2">{delBusy===e.id ? <span className="text-xs text-red-500 font-bold">Deleting...</span> : <I.trash size={18}/>}</button></li>)}
+          {employees.map(e=><li key={e.id} className="px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 transition"><div><p className="font-bold text-slate-800">{e.name}</p><p className="text-xs font-medium text-slate-500 mt-0.5">{e.email||'no email'}</p></div><button onClick={()=>del(e)} className="text-slate-300 hover:text-red-500 transition p-2"><I.trash size={18}/></button></li>)}
         </ul>
       </div>
     </div>
@@ -715,12 +791,11 @@ function Employees({ t, employees, reload }){
 }
 
 /* ---------------- Logins (users) ---------------- */
-function People({ t, me, users, reload }){
+function People({ t, me, users, reload, patch }){
   const canMakeAdmin=me.role==='superadmin';
   const [f,setF]=useState({username:'',name:'',email:'',role:'user',password:genPassword(),qual:''});
   const [msg,setMsg]=useState(null); const [created,setCreated]=useState(null); const [busy,setBusy]=useState(false); const [bulkMsg,setBulkMsg]=useState(null);
-  const [delBusy,setDelBusy]=useState(null);
-  
+
   const set=(k,v)=>setF(x=>Object.assign({},x,{[k]:v}));
   const add=async(e)=>{ e.preventDefault(); setMsg({bad:false,text:'Adding login...'}); setCreated(null); setBusy(true);
     const tk=store.get(SESS).token; const r=await api('addUser',{token:tk,user:f}); setBusy(false);
@@ -736,13 +811,12 @@ function People({ t, me, users, reload }){
       if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added}, skipped ${r.skipped}.`}); reload(); } else setBulkMsg({bad:true,text:errText(r)});
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); } e.target.value='';
   };
-  const del=async(u)=>{ 
-    if(!window.confirm('Remove '+u.username+'?'))return; 
-    setDelBusy(u.username);
-    const tk=store.get(SESS).token; 
-    const r=await api('deleteUser',{token:tk,username:u.username}); 
-    setDelBusy(null);
-    if(r.ok)reload(); else alert('Could not remove.'); 
+  const del=async(u)=>{
+    if(!window.confirm('Remove '+u.username+'?'))return;
+    patch.removeUser(u.username);
+    const tk=store.get(SESS).token;
+    const r=await api('deleteUser',{token:tk,username:u.username});
+    if(!r||!r.ok){ alert('Could not remove.'); reload(); }
   };
   return (
     <div className="space-y-6 fade">
@@ -775,7 +849,7 @@ function People({ t, me, users, reload }){
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All logins ({users.length})</h2></div>
         <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 text-left border-b border-slate-200"><tr><th className="px-4 py-3 font-semibold">Name</th><th className="px-4 py-3 font-semibold">Username</th><th className="px-4 py-3 font-semibold">Email</th><th className="px-4 py-3 font-semibold">Qualification</th><th className="px-4 py-3 font-semibold">Access</th><th className="px-4 py-3"></th></tr></thead>
-          <tbody>{users.map(u=><tr key={u.username} className={`border-t border-slate-100 hover:bg-slate-50 transition ${delBusy===u.username?'opacity-50 pointer-events-none':''}`}><td className="px-4 py-3 font-bold text-slate-800">{u.name}</td><td className="px-4 py-3 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-3 text-slate-600">{u.email||'-'}</td><td className="px-4 py-3 text-slate-600">{u.qual||'-'}</td><td className="px-4 py-3"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-3 text-right">{u.username!==me.username && <button disabled={delBusy===u.username} onClick={()=>del(u)} className="text-slate-300 hover:text-red-500 transition p-1">{delBusy===u.username ? <span className="text-xs text-red-500 font-bold">Deleting...</span> : <I.trash size={18}/>}</button>}</td></tr>)}</tbody>
+          <tbody>{users.map(u=><tr key={u.username} className="border-t border-slate-100 hover:bg-slate-50 transition"><td className="px-4 py-3 font-bold text-slate-800">{u.name}</td><td className="px-4 py-3 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-3 text-slate-600">{u.email||'-'}</td><td className="px-4 py-3 text-slate-600">{u.qual||'-'}</td><td className="px-4 py-3"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-3 text-right">{u.username!==me.username && <button onClick={()=>del(u)} className="text-slate-300 hover:text-red-500 transition p-1"><I.trash size={18}/></button>}</td></tr>)}</tbody>
         </table></div>
       </div>
     </div>
