@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>IFES Training Schedule</title>
+<link rel="icon" href="https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp" />
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.fade{animation:fade .25s ease-out}</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+window.addEventListener('error', function(e){
+  var r=document.getElementById('root');
+  if(r && !r.hasChildNodes()){ r.innerHTML='<pre style="padding:20px;color:#b00020;white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,monospace">Startup error:\n\n'+((e&&(e.message||e.error))||'unknown')+'\n\nOpen the console (F12) for detail.</pre>'; }
+});
+</script>
+
+<script type="text/plain" id="appsrc">
+/* eslint-disable */
+const { useState, useEffect } = React;
+
+const CONFIG = {
+  BACKEND_PREFIX: "https://script.google.com/macros/s/AKfycbz51Kg6kdeyAMvQ3d79NlVlqRGyTl-9jbWrDMYLzv3G7Je3CemcG0WGqX",
+  LOGO_URL: "https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp",
+  REFRESH_MS: 5 * 60 * 1000
+};
+const THEME = { primary:'#005C9C', secondary:'#0077C8', lightBg:'#F1F6FA' };
+
+/* Shares the same localStorage key as the main portal, so anyone who has
+   already used the portal on this device sees the schedule straight away. */
+const getCode=()=>{ try{return JSON.parse(localStorage.getItem('backend_code'))||'';}catch(e){return '';} };
+const setCodeStore=(c)=>{ try{localStorage.setItem('backend_code',JSON.stringify(c));}catch(e){} };
+const clearCode=()=>{ try{localStorage.removeItem('backend_code');}catch(e){} };
+
+const fmtUK=(iso)=>{ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'}); };
+const todayISO=()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+
+const Logo=({className})=> <img src={CONFIG.LOGO_URL} alt="IFES" className={className} onError={(e)=>{e.target.style.display='none';}} />;
+const Badge=({children,tone})=>{ const m={green:'bg-emerald-100 text-emerald-700',amber:'bg-amber-100 text-amber-700',slate:'bg-slate-100 text-slate-600',blue:'bg-sky-100 text-sky-700'}; return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${m[tone]||m.slate}`}>{children}</span>; };
+
+function App(){
+  const t=THEME;
+  const [code,setCode]=useState(getCode());
+  const [entry,setEntry]=useState('');
+  const [rows,setRows]=useState(null);
+  const [err,setErr]=useState('');
+  const [busy,setBusy]=useState(false);
+  const [view,setView]=useState('upcoming');
+  const [updated,setUpdated]=useState(null);
+
+  const load=async(c)=>{
+    const use=(c||code).trim();
+    if(!use)return;
+    setBusy(true); setErr('');
+    try{
+      const res=await fetch(CONFIG.BACKEND_PREFIX+use+'/exec?action=schedule');
+      const j=await res.json();
+      if(j&&j.ok){ setRows(j.schedule||[]); setUpdated(new Date()); if(c){ setCode(use); setCodeStore(use); } }
+      else setErr('The server replied but could not load the schedule.');
+    }catch(e){
+      setErr('That access code does not match, or the backend needs updating. Check the 12 characters and try again.');
+      if(!c){ setRows(null); }
+    }
+    setBusy(false);
+  };
+
+  useEffect(()=>{ if(code){ load(); const iv=setInterval(()=>load(),CONFIG.REFRESH_MS); return ()=>clearInterval(iv); } },[code]);
+
+  const submit=(e)=>{ e.preventDefault(); if(!entry.trim()){ setErr('Enter the access code.'); return; } load(entry); setEntry(''); };
+  const changeCode=()=>{ clearCode(); setCode(''); setRows(null); setErr(''); };
+
+  if(!code || (rows===null && !busy && err)){
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4" style={{backgroundColor:t.lightBg}}>
+        <form onSubmit={submit} className="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden fade">
+          <div className="px-8 py-8 text-center border-b border-slate-100"><Logo className="h-16 mx-auto object-contain" /><p className="text-slate-500 text-sm mt-3 font-medium">Training Schedule</p></div>
+          <div className="p-8 space-y-4">
+            <div><label className="block text-sm font-semibold text-slate-700 mb-1">Access code</label>
+              <input autoFocus value={entry} onChange={e=>setEntry(e.target.value)} placeholder="12-character code" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 font-mono focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+            {err && <p className="text-sm text-red-600 font-medium">{err}</p>}
+            <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 transition disabled:opacity-60">{busy?'Checking...':'View schedule'}</button>
+            <p className="text-xs text-slate-400 text-center">Read only. No login needed, just the code.</p>
+          </div>
+        </form>
+      </div>
+    );
+  }
+
+  const all=rows||[];
+  const today=todayISO();
+  const upcoming=all.filter(s=>s.status!=='Done'&&String(s.date).slice(0,10)>=today).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const overdue=all.filter(s=>s.status!=='Done'&&String(s.date).slice(0,10)<today).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const done=all.filter(s=>s.status==='Done').sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const shown=view==='upcoming'?upcoming:view==='overdue'?overdue:done;
+
+  /* Group by date for a clean agenda layout. */
+  const groups=[];
+  shown.forEach(s=>{ const k=String(s.date).slice(0,10); const g=groups.find(x=>x.date===k); if(g)g.items.push(s); else groups.push({date:k,items:[s]}); });
+
+  const TabBtn=({id,label,count})=>(
+    <button onClick={()=>setView(id)} style={{backgroundColor:view===id?t.secondary:'transparent',color:view===id?'#fff':'#475569'}}
+      className="px-4 py-1.5 rounded-full text-sm font-semibold transition hover:opacity-90">{label} ({count})</button>
+  );
+
+  return (
+    <div className="min-h-screen" style={{backgroundColor:t.lightBg}}>
+      <header className="bg-white border-b border-slate-200 shadow-sm">
+        <div className="max-w-3xl mx-auto px-4 h-16 flex items-center justify-between">
+          <div className="flex items-center gap-3"><Logo className="h-10 object-contain" /><span className="text-slate-400 font-medium text-sm">Training Schedule</span></div>
+          <div className="flex items-center gap-3">
+            <button onClick={()=>load()} disabled={busy} className="text-sm font-semibold hover:opacity-80 transition disabled:opacity-50" style={{color:t.primary}}>{busy?'Refreshing...':'Refresh'}</button>
+            <button onClick={changeCode} className="text-xs text-slate-400 underline hover:text-slate-600">Change code</button>
+          </div>
+        </div>
+      </header>
+      <main className="max-w-3xl mx-auto px-4 py-8 fade">
+        <div className="flex flex-wrap items-center gap-2 mb-6">
+          <TabBtn id="upcoming" label="Upcoming" count={upcoming.length} />
+          {overdue.length>0 && <TabBtn id="overdue" label="Overdue" count={overdue.length} />}
+          <TabBtn id="done" label="Completed" count={done.length} />
+        </div>
+        {err && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{err}</div>}
+        {rows===null && <p className="text-slate-400 italic">Loading schedule...</p>}
+        {rows!==null && groups.length===0 && <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 italic shadow-sm">Nothing here.</div>}
+        <div className="space-y-6">
+          {groups.map(g=>(
+            <div key={g.date}>
+              <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">{fmtUK(g.date)}</h2>
+              <div className="space-y-2">
+                {g.items.map(s=>(
+                  <div key={s.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-bold text-slate-800">{s.site}</p>
+                      <p className="text-sm text-slate-600">{s.course}</p>
+                      <p className="text-xs text-slate-400 mt-0.5">Trainer: {s.trainer}</p>
+                    </div>
+                    <Badge tone={s.status==='Done'?'green':(String(s.date).slice(0,10)<today?'amber':'blue')}>{s.status==='Done'?'Done':(String(s.date).slice(0,10)<today?'Overdue':'Planned')}</Badge>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        {updated && <p className="text-xs text-slate-400 text-center mt-8">Last updated {updated.toLocaleTimeString('en-GB')}. Auto refreshes every 5 minutes.</p>}
+      </main>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+
+<script>
+(function(){
+  try{
+    var src=document.getElementById('appsrc').textContent;
+    var out=Babel.transform(src,{presets:[['react',{runtime:'classic',pragma:'React.createElement',pragmaFrag:'React.Fragment'}]]}).code;
+    (0,eval)(out);
+  }catch(err){
+    var root=document.getElementById('root');
+    if(root) root.innerHTML='<pre style="padding:20px;color:#b00020;white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,monospace">Startup error:\n\n'+((err&&err.message)||err)+'</pre>';
+    throw err;
+  }
+})();
+</script>
+</body>
+</html>
