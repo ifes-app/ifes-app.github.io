@@ -41,8 +41,63 @@ const clearCode=()=>{ try{localStorage.removeItem('backend_code');}catch(e){} };
 const fmtUK=(iso)=>{ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'}); };
 const todayISO=()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
+const fmtDayLong=(iso)=>{ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); };
+const isoOf=(y,m,d)=> y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTHS_SHORT=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
 const Logo=({className})=> <img src={CONFIG.LOGO_URL} alt="IFES" className={className} onError={(e)=>{e.target.style.display='none';}} />;
 const Badge=({children,tone})=>{ const m={green:'bg-emerald-100 text-emerald-700',amber:'bg-amber-100 text-amber-700',slate:'bg-slate-100 text-slate-600',blue:'bg-sky-100 text-sky-700'}; return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${m[tone]||m.slate}`}>{children}</span>; };
+
+/* Tone for a whole day: amber if anything is overdue, blue if anything is still
+   planned, green if every session that day is already done. */
+const dayTone=(items,today)=>{
+  if(items.some(s=>s.status!=='Done' && String(s.date).slice(0,10)<today)) return 'amber';
+  if(items.some(s=>s.status!=='Done')) return 'blue';
+  return 'green';
+};
+const dotColour={amber:'#d97706',blue:'#0077C8',green:'#059669'};
+const cellBg={amber:'bg-amber-50 border-amber-200',blue:'bg-sky-50 border-sky-200',green:'bg-emerald-50 border-emerald-200'};
+
+/* One month grid. compact=true is used inside the year overview. */
+function MonthGrid({ t, year, month, byDay, today, selDay, onPick, compact }){
+  const firstDay=new Date(year,month,1).getDay();
+  const days=new Date(year,month+1,0).getDate();
+  const cells=[];
+  for(let i=0;i<firstDay;i++) cells.push(<div key={'e'+i} className="pointer-events-none"></div>);
+  for(let d=1;d<=days;d++){
+    const iso=isoOf(year,month,d);
+    const items=byDay[iso]||[];
+    const has=items.length>0;
+    const tone=has?dayTone(items,today):null;
+    const isToday=iso===today;
+    const isSel=selDay===iso;
+    if(compact){
+      cells.push(
+        <div key={d} title={has?(items.length+' session'+(items.length>1?'s':'')):''} className={`flex flex-col items-center justify-center text-[10px] leading-none h-6 rounded ${isToday?'ring-1 ring-slate-400':''}`}>
+          <span className={has?'font-bold text-slate-700':'text-slate-400'}>{d}</span>
+          {has && <span className="mt-0.5 w-1 h-1 rounded-full" style={{backgroundColor:dotColour[tone]}}></span>}
+        </div>
+      );
+    } else {
+      cells.push(
+        <div key={d} onClick={()=>has&&onPick&&onPick(iso)} className={`p-1.5 border rounded-lg flex flex-col items-center justify-center h-14 transition ${has?'cursor-pointer '+cellBg[tone]+' hover:brightness-95':'border-slate-100'} ${isSel?'ring-2 ring-sky-500':isToday?'ring-1 ring-slate-400':''}`}>
+          <span className={`text-sm font-semibold ${has?'text-slate-800':'text-slate-500'}`}>{d}</span>
+          {has && <span className="mt-1 text-[10px] font-bold px-1.5 rounded-full text-white" style={{backgroundColor:dotColour[tone]}}>{items.length}</span>}
+        </div>
+      );
+    }
+  }
+  const dow=['Su','Mo','Tu','We','Th','Fr','Sa'];
+  return (
+    <div>
+      <div className={`grid grid-cols-7 ${compact?'gap-0.5 text-[9px]':'gap-1 text-xs'} text-center font-semibold text-slate-400 mb-1`}>
+        {dow.map(d=><div key={d}>{compact?d[0]:d}</div>)}
+      </div>
+      <div className={`grid grid-cols-7 ${compact?'gap-0.5':'gap-1'}`}>{cells}</div>
+    </div>
+  );
+}
 
 function App(){
   const t=THEME;
@@ -53,6 +108,9 @@ function App(){
   const [busy,setBusy]=useState(false);
   const [view,setView]=useState('upcoming');
   const [updated,setUpdated]=useState(null);
+  const [mode,setMode]=useState('agenda');
+  const [calDate,setCalDate]=useState(new Date());
+  const [selDay,setSelDay]=useState(null);
 
   const load=async(c)=>{
     const use=(c||code).trim();
@@ -99,13 +157,37 @@ function App(){
   const done=all.filter(s=>s.status==='Done').sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   const shown=view==='upcoming'?upcoming:view==='overdue'?overdue:done;
 
-  /* Group by date for a clean agenda layout. */
+  /* Group by date for the agenda layout. */
   const groups=[];
   shown.forEach(s=>{ const k=String(s.date).slice(0,10); const g=groups.find(x=>x.date===k); if(g)g.items.push(s); else groups.push({date:k,items:[s]}); });
+
+  /* Map every session under its day for the calendar views. */
+  const byDay={};
+  all.forEach(s=>{ const k=String(s.date).slice(0,10); (byDay[k]=byDay[k]||[]).push(s); });
 
   const TabBtn=({id,label,count})=>(
     <button onClick={()=>setView(id)} style={{backgroundColor:view===id?t.secondary:'transparent',color:view===id?'#fff':'#475569'}}
       className="px-4 py-1.5 rounded-full text-sm font-semibold transition hover:opacity-90">{label} ({count})</button>
+  );
+  const ModeBtn=({id,label})=>(
+    <button onClick={()=>{setMode(id);setSelDay(null);}} style={{backgroundColor:mode===id?t.primary:'#fff'}}
+      className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition ${mode===id?'text-white border-transparent shadow-sm':'text-slate-600 border-slate-300 hover:bg-slate-50'}`}>{label}</button>
+  );
+
+  const y=calDate.getFullYear(), m=calDate.getMonth();
+  const stepMonth=(n)=>setCalDate(new Date(y,m+n,1));
+  const stepYear=(n)=>setCalDate(new Date(y+n,m,1));
+  const dayItems=selDay?(byDay[selDay]||[]).slice().sort((a,b)=>String(a.course).localeCompare(String(b.course))):[];
+
+  const Session=({s})=>(
+    <div key={s.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between gap-3">
+      <div>
+        <p className="font-bold text-slate-800">{s.site}</p>
+        <p className="text-sm text-slate-600">{s.course}</p>
+        <p className="text-xs text-slate-400 mt-0.5">Trainer: {s.trainer}</p>
+      </div>
+      <Badge tone={s.status==='Done'?'green':(String(s.date).slice(0,10)<today?'amber':'blue')}>{s.status==='Done'?'Done':(String(s.date).slice(0,10)<today?'Overdue':'Planned')}</Badge>
+    </div>
   );
 
   return (
@@ -121,32 +203,83 @@ function App(){
       </header>
       <main className="max-w-3xl mx-auto px-4 py-8 fade">
         <div className="flex flex-wrap items-center gap-2 mb-6">
-          <TabBtn id="upcoming" label="Upcoming" count={upcoming.length} />
-          {overdue.length>0 && <TabBtn id="overdue" label="Overdue" count={overdue.length} />}
-          <TabBtn id="done" label="Completed" count={done.length} />
+          <ModeBtn id="agenda" label="Agenda" />
+          <ModeBtn id="month" label="Month" />
+          <ModeBtn id="year" label="Year" />
         </div>
+
         {err && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{err}</div>}
         {rows===null && <p className="text-slate-400 italic">Loading schedule...</p>}
-        {rows!==null && groups.length===0 && <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 italic shadow-sm">Nothing here.</div>}
-        <div className="space-y-6">
-          {groups.map(g=>(
-            <div key={g.date}>
-              <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">{fmtUK(g.date)}</h2>
-              <div className="space-y-2">
-                {g.items.map(s=>(
-                  <div key={s.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-bold text-slate-800">{s.site}</p>
-                      <p className="text-sm text-slate-600">{s.course}</p>
-                      <p className="text-xs text-slate-400 mt-0.5">Trainer: {s.trainer}</p>
-                    </div>
-                    <Badge tone={s.status==='Done'?'green':(String(s.date).slice(0,10)<today?'amber':'blue')}>{s.status==='Done'?'Done':(String(s.date).slice(0,10)<today?'Overdue':'Planned')}</Badge>
-                  </div>
-                ))}
+
+        {rows!==null && mode==='agenda' && (
+          <div>
+            <div className="flex flex-wrap items-center gap-2 mb-6">
+              <TabBtn id="upcoming" label="Upcoming" count={upcoming.length} />
+              {overdue.length>0 && <TabBtn id="overdue" label="Overdue" count={overdue.length} />}
+              <TabBtn id="done" label="Completed" count={done.length} />
+            </div>
+            {groups.length===0 && <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 italic shadow-sm">Nothing here.</div>}
+            <div className="space-y-6">
+              {groups.map(g=>(
+                <div key={g.date}>
+                  <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">{fmtUK(g.date)}</h2>
+                  <div className="space-y-2">{g.items.map(s=><Session key={s.id} s={s} />)}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {rows!==null && mode==='month' && (
+          <div>
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <button onClick={()=>stepMonth(-1)} className="px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition font-bold">&lt;</button>
+                <h2 className="font-bold text-lg text-slate-800">{MONTHS[m]} {y}</h2>
+                <button onClick={()=>stepMonth(1)} className="px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition font-bold">&gt;</button>
+              </div>
+              <MonthGrid t={t} year={y} month={m} byDay={byDay} today={today} selDay={selDay} onPick={setSelDay} />
+              <div className="flex flex-wrap gap-4 mt-4 text-xs text-slate-500">
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:dotColour.blue}}></span> Planned</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:dotColour.amber}}></span> Overdue</span>
+                <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{backgroundColor:dotColour.green}}></span> All done</span>
               </div>
             </div>
-          ))}
-        </div>
+            {selDay && (
+              <div className="mt-6">
+                <h3 className="text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">{fmtDayLong(selDay)}</h3>
+                <div className="space-y-2">{dayItems.map(s=><Session key={s.id} s={s} />)}</div>
+              </div>
+            )}
+            {!selDay && <p className="text-xs text-slate-400 text-center mt-4">Tap a highlighted day to see its sessions.</p>}
+          </div>
+        )}
+
+        {rows!==null && mode==='year' && (
+          <div>
+            <div className="flex items-center justify-between mb-5">
+              <button onClick={()=>stepYear(-1)} className="px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition font-bold">&lt;</button>
+              <h2 className="font-bold text-lg text-slate-800">{y}</h2>
+              <button onClick={()=>stepYear(1)} className="px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition font-bold">&gt;</button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+              {MONTHS.map((name,mi)=>{
+                const count=Object.keys(byDay).filter(k=>{ const d=new Date(k); return d.getFullYear()===y && d.getMonth()===mi; }).reduce((n,k)=>n+byDay[k].length,0);
+                return (
+                  <div key={mi} onClick={()=>{setCalDate(new Date(y,mi,1));setSelDay(null);setMode('month');}} className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm cursor-pointer hover:border-sky-300 transition">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-bold text-sm text-slate-700">{MONTHS_SHORT[mi]}</span>
+                      {count>0 && <span className="text-[10px] font-bold text-white rounded-full px-1.5" style={{backgroundColor:t.secondary}}>{count}</span>}
+                    </div>
+                    <MonthGrid t={t} year={y} month={mi} byDay={byDay} today={today} selDay={null} compact />
+                  </div>
+                );
+              })}
+            </div>
+            <p className="text-xs text-slate-400 text-center mt-4">Tap a month to open it.</p>
+          </div>
+        )}
+
         {updated && <p className="text-xs text-slate-400 text-center mt-8">Last updated {updated.toLocaleTimeString('en-GB')}. Auto refreshes every 5 minutes.</p>}
       </main>
     </div>
