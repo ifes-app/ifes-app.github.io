@@ -9,7 +9,10 @@
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
-<style>@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.fade{animation:fade .25s ease-out}</style>
+<style>
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .fade{animation:fade .25s ease-out}
+</style>
 </head>
 <body>
 <div id="root"></div>
@@ -32,46 +35,71 @@ const CONFIG = {
 };
 const THEME = { primary:'#005C9C', secondary:'#0077C8', lightBg:'#F1F6FA' };
 
-/* Shares the same localStorage key as the main portal, so anyone who has
-   already used the portal on this device sees the schedule straight away. */
-const getCode=()=>{ try{return JSON.parse(localStorage.getItem('backend_code'))||'';}catch(e){return '';} };
-const setCodeStore=(c)=>{ try{localStorage.setItem('backend_code',JSON.stringify(c));}catch(e){} };
-const clearCode=()=>{ try{localStorage.removeItem('backend_code');}catch(e){} };
+/* Retrieves code from URL parameter OR localStorage */
+const getCode = () => { 
+  try {
+    // 1. Check if there's a ?code=... in the URL (for easy team sharing)
+    const params = new URLSearchParams(window.location.search);
+    const urlCode = params.get('code');
+    
+    if (urlCode && urlCode.trim() !== '') {
+      // Save it to storage so they stay logged in on future visits
+      localStorage.setItem('backend_code', JSON.stringify(urlCode));
+      // Clean up the URL in the address bar (removes the ?code= part to look cleaner)
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
+      return urlCode;
+    }
+    
+    // 2. Fall back to local storage
+    return JSON.parse(localStorage.getItem('backend_code')) || '';
+  } catch(e) {
+    return '';
+  } 
+};
 
-const fmtUK=(iso)=>{ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'}); };
-const todayISO=()=>{ const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
+const setCodeStore = (c) => { try{localStorage.setItem('backend_code',JSON.stringify(c));}catch(e){} };
+const clearCode = () => { try{localStorage.removeItem('backend_code');}catch(e){} };
 
-const fmtDayLong=(iso)=>{ if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); };
-const isoOf=(y,m,d)=> y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
-const MONTHS=['January','February','March','April','May','June','July','August','September','October','November','December'];
-const MONTHS_SHORT=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtUK = (iso) => { if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short',year:'numeric'}); };
+const todayISO = () => { const d=new Date(); return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); };
 
-const Logo=({className})=> <img src={CONFIG.LOGO_URL} alt="IFES" className={className} onError={(e)=>{e.target.style.display='none';}} />;
-const Badge=({children,tone})=>{ const m={green:'bg-emerald-100 text-emerald-700',amber:'bg-amber-100 text-amber-700',slate:'bg-slate-100 text-slate-600',blue:'bg-sky-100 text-sky-700'}; return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${m[tone]||m.slate}`}>{children}</span>; };
+const fmtDayLong = (iso) => { if(!iso)return ''; const d=new Date(iso); if(isNaN(d))return String(iso); return d.toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'}); };
+const isoOf = (y,m,d) => y+'-'+String(m+1).padStart(2,'0')+'-'+String(d).padStart(2,'0');
+const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+const MONTHS_SHORT = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-/* Tone for a whole day: amber if anything is overdue, blue if anything is still
-   planned, green if every session that day is already done. */
-const dayTone=(items,today)=>{
+const Logo = ({className}) => <img src={CONFIG.LOGO_URL} alt="IFES" className={className} onError={(e)=>{e.target.style.display='none';}} />;
+const Badge = ({children,tone}) => { 
+  const m={green:'bg-emerald-100 text-emerald-700',amber:'bg-amber-100 text-amber-700',slate:'bg-slate-100 text-slate-600',blue:'bg-sky-100 text-sky-700'}; 
+  return <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${m[tone]||m.slate}`}>{children}</span>; 
+};
+
+/* Tone for a whole day: amber if anything is overdue, blue if anything is still planned, green if every session that day is already done. */
+const dayTone = (items,today) => {
   if(items.some(s=>s.status!=='Done' && String(s.date).slice(0,10)<today)) return 'amber';
   if(items.some(s=>s.status!=='Done')) return 'blue';
   return 'green';
 };
-const dotColour={amber:'#d97706',blue:'#0077C8',green:'#059669'};
-const cellBg={amber:'bg-amber-50 border-amber-200',blue:'bg-sky-50 border-sky-200',green:'bg-emerald-50 border-emerald-200'};
+const dotColour = {amber:'#d97706',blue:'#0077C8',green:'#059669'};
+const cellBg = {amber:'bg-amber-50 border-amber-200',blue:'bg-sky-50 border-sky-200',green:'bg-emerald-50 border-emerald-200'};
 
-/* One month grid. compact=true is used inside the year overview. */
 function MonthGrid({ t, year, month, byDay, today, selDay, onPick, compact }){
-  const firstDay=new Date(year,month,1).getDay();
-  const days=new Date(year,month+1,0).getDate();
-  const cells=[];
+  const firstDay = new Date(year,month,1).getDay();
+  const days = new Date(year,month+1,0).getDate();
+  const cells = [];
+  
   for(let i=0;i<firstDay;i++) cells.push(<div key={'e'+i} className="pointer-events-none"></div>);
+  
   for(let d=1;d<=days;d++){
-    const iso=isoOf(year,month,d);
-    const items=byDay[iso]||[];
-    const has=items.length>0;
-    const tone=has?dayTone(items,today):null;
-    const isToday=iso===today;
-    const isSel=selDay===iso;
+    const iso = isoOf(year,month,d);
+    const items = byDay[iso]||[];
+    const has = items.length>0;
+    const tone = has?dayTone(items,today):null;
+    const isToday = iso===today;
+    const isSel = selDay===iso;
+    
     if(compact){
       cells.push(
         <div key={d} title={has?(items.length+' session'+(items.length>1?'s':'')):''} className={`flex flex-col items-center justify-center text-[10px] leading-none h-6 rounded ${isToday?'ring-1 ring-slate-400':''}`}>
@@ -88,7 +116,7 @@ function MonthGrid({ t, year, month, byDay, today, selDay, onPick, compact }){
       );
     }
   }
-  const dow=['Su','Mo','Tu','We','Th','Fr','Sa'];
+  const dow = ['Su','Mo','Tu','We','Th','Fr','Sa'];
   return (
     <div>
       <div className={`grid grid-cols-7 ${compact?'gap-0.5 text-[9px]':'gap-1 text-xs'} text-center font-semibold text-slate-400 mb-1`}>
@@ -100,28 +128,32 @@ function MonthGrid({ t, year, month, byDay, today, selDay, onPick, compact }){
 }
 
 function App(){
-  const t=THEME;
-  const [code,setCode]=useState(getCode());
-  const [entry,setEntry]=useState('');
-  const [rows,setRows]=useState(null);
-  const [err,setErr]=useState('');
-  const [busy,setBusy]=useState(false);
-  const [view,setView]=useState('upcoming');
-  const [updated,setUpdated]=useState(null);
-  const [mode,setMode]=useState('agenda');
-  const [calDate,setCalDate]=useState(new Date());
-  const [selDay,setSelDay]=useState(null);
+  const t = THEME;
+  const [code, setCode] = useState(() => getCode());
+  const [entry, setEntry] = useState('');
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [view, setView] = useState('upcoming');
+  const [updated, setUpdated] = useState(null);
+  const [mode, setMode] = useState('agenda');
+  const [calDate, setCalDate] = useState(new Date());
+  const [selDay, setSelDay] = useState(null);
 
-  const load=async(c)=>{
-    const use=(c||code).trim();
-    if(!use)return;
+  const load = async(c) => {
+    const use = (c || code).trim();
+    if(!use) return;
     setBusy(true); setErr('');
-    try{
-      const res=await fetch(CONFIG.BACKEND_PREFIX+use+'/exec?action=schedule');
-      const j=await res.json();
-      if(j&&j.ok){ setRows(j.schedule||[]); setUpdated(new Date()); if(c){ setCode(use); setCodeStore(use); } }
+    try {
+      const res = await fetch(CONFIG.BACKEND_PREFIX + use + '/exec?action=schedule');
+      const j = await res.json();
+      if(j && j.ok){ 
+        setRows(j.schedule || []); 
+        setUpdated(new Date()); 
+        if(c){ setCode(use); setCodeStore(use); } 
+      }
       else setErr('The server replied but could not load the schedule.');
-    }catch(e){
+    } catch(e) {
       setErr('That access code does not match, or the backend needs updating. Check the 12 characters and try again.');
       if(!c){ setRows(null); }
     }
@@ -130,10 +162,10 @@ function App(){
 
   useEffect(()=>{ if(code){ load(); const iv=setInterval(()=>load(),CONFIG.REFRESH_MS); return ()=>clearInterval(iv); } },[code]);
 
-  const submit=(e)=>{ e.preventDefault(); if(!entry.trim()){ setErr('Enter the access code.'); return; } load(entry); setEntry(''); };
-  const changeCode=()=>{ clearCode(); setCode(''); setRows(null); setErr(''); };
+  const submit = (e) => { e.preventDefault(); if(!entry.trim()){ setErr('Enter the access code.'); return; } load(entry); setEntry(''); };
+  const changeCode = () => { clearCode(); setCode(''); setRows(null); setErr(''); };
 
-  if(!code || (rows===null && !busy && err)){
+  if(!code || (rows === null && !busy && err)){
     return (
       <div className="min-h-screen flex items-center justify-center p-4" style={{backgroundColor:t.lightBg}}>
         <form onSubmit={submit} className="w-full max-w-sm bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden fade">
@@ -143,43 +175,46 @@ function App(){
               <input autoFocus value={entry} onChange={e=>setEntry(e.target.value)} placeholder="12-character code" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 font-mono focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
             {err && <p className="text-sm text-red-600 font-medium">{err}</p>}
             <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 transition disabled:opacity-60">{busy?'Checking...':'View schedule'}</button>
-            <p className="text-xs text-slate-400 text-center">Read only. No login needed, just the code.</p>
+            <p className="text-xs text-slate-400 text-center leading-relaxed">
+              Read only. No login needed, just the code. <br/>
+              <span className="opacity-75 block mt-1">(Hint: You can share a direct link by adding <strong>?code=YOUR_CODE</strong> to the URL)</span>
+            </p>
           </div>
         </form>
       </div>
     );
   }
 
-  const all=rows||[];
-  const today=todayISO();
-  const upcoming=all.filter(s=>s.status!=='Done'&&String(s.date).slice(0,10)>=today).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  const overdue=all.filter(s=>s.status!=='Done'&&String(s.date).slice(0,10)<today).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  const done=all.filter(s=>s.status==='Done').sort((a,b)=>String(b.date).localeCompare(String(a.date)));
-  const shown=view==='upcoming'?upcoming:view==='overdue'?overdue:done;
+  const all = rows || [];
+  const today = todayISO();
+  const upcoming = all.filter(s=>s.status!=='Done'&&String(s.date).slice(0,10)>=today).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const overdue = all.filter(s=>s.status!=='Done'&&String(s.date).slice(0,10)<today).sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const done = all.filter(s=>s.status==='Done').sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const shown = view==='upcoming'?upcoming:view==='overdue'?overdue:done;
 
   /* Group by date for the agenda layout. */
-  const groups=[];
+  const groups = [];
   shown.forEach(s=>{ const k=String(s.date).slice(0,10); const g=groups.find(x=>x.date===k); if(g)g.items.push(s); else groups.push({date:k,items:[s]}); });
 
   /* Map every session under its day for the calendar views. */
-  const byDay={};
+  const byDay = {};
   all.forEach(s=>{ const k=String(s.date).slice(0,10); (byDay[k]=byDay[k]||[]).push(s); });
 
-  const TabBtn=({id,label,count})=>(
+  const TabBtn = ({id,label,count}) => (
     <button onClick={()=>setView(id)} style={{backgroundColor:view===id?t.secondary:'transparent',color:view===id?'#fff':'#475569'}}
       className="px-4 py-1.5 rounded-full text-sm font-semibold transition hover:opacity-90">{label} ({count})</button>
   );
-  const ModeBtn=({id,label})=>(
+  const ModeBtn = ({id,label}) => (
     <button onClick={()=>{setMode(id);setSelDay(null);}} style={{backgroundColor:mode===id?t.primary:'#fff'}}
       className={`px-4 py-1.5 rounded-lg text-sm font-semibold border transition ${mode===id?'text-white border-transparent shadow-sm':'text-slate-600 border-slate-300 hover:bg-slate-50'}`}>{label}</button>
   );
 
-  const y=calDate.getFullYear(), m=calDate.getMonth();
-  const stepMonth=(n)=>setCalDate(new Date(y,m+n,1));
-  const stepYear=(n)=>setCalDate(new Date(y+n,m,1));
-  const dayItems=selDay?(byDay[selDay]||[]).slice().sort((a,b)=>String(a.course).localeCompare(String(b.course))):[];
+  const y = calDate.getFullYear(), m = calDate.getMonth();
+  const stepMonth = (n) => setCalDate(new Date(y,m+n,1));
+  const stepYear = (n) => setCalDate(new Date(y+n,m,1));
+  const dayItems = selDay?(byDay[selDay]||[]).slice().sort((a,b)=>String(a.course).localeCompare(String(b.course))):[];
 
-  const Session=({s})=>(
+  const Session = ({s}) => (
     <div key={s.id} className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm flex items-center justify-between gap-3">
       <div>
         <p className="font-bold text-slate-800">{s.site}</p>
@@ -209,28 +244,30 @@ function App(){
         </div>
 
         {err && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{err}</div>}
-        {rows===null && <p className="text-slate-400 italic">Loading schedule...</p>}
+        {rows === null && <p className="text-slate-400 italic">Loading schedule...</p>}
 
-        {rows!==null && mode==='agenda' && (
+        {}
+        {rows !== null && mode === 'agenda' && (
           <div>
             <div className="flex flex-wrap items-center gap-2 mb-6">
               <TabBtn id="upcoming" label="Upcoming" count={upcoming.length} />
-              {overdue.length>0 && <TabBtn id="overdue" label="Overdue" count={overdue.length} />}
+              {overdue.length > 0 && <TabBtn id="overdue" label="Overdue" count={overdue.length} />}
               <TabBtn id="done" label="Completed" count={done.length} />
             </div>
-            {groups.length===0 && <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 italic shadow-sm">Nothing here.</div>}
+            {groups.length === 0 && <div className="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 italic shadow-sm">Nothing here.</div>}
             <div className="space-y-6">
-              {groups.map(g=>(
+              {groups.map(g => (
                 <div key={g.date}>
                   <h2 className="text-sm font-bold text-slate-500 uppercase tracking-wide mb-2">{fmtUK(g.date)}</h2>
-                  <div className="space-y-2">{g.items.map(s=><Session key={s.id} s={s} />)}</div>
+                  <div className="space-y-2">{g.items.map(s => <Session key={s.id} s={s} />)}</div>
                 </div>
               ))}
             </div>
           </div>
         )}
 
-        {rows!==null && mode==='month' && (
+        {}
+        {rows !== null && mode === 'month' && (
           <div>
             <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
               <div className="flex items-center justify-between mb-4">
@@ -255,7 +292,8 @@ function App(){
           </div>
         )}
 
-        {rows!==null && mode==='year' && (
+        {}
+        {rows !== null && mode === 'year' && (
           <div>
             <div className="flex items-center justify-between mb-5">
               <button onClick={()=>stepYear(-1)} className="px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition font-bold">&lt;</button>
@@ -263,13 +301,13 @@ function App(){
               <button onClick={()=>stepYear(1)} className="px-3 py-1.5 rounded-lg text-slate-500 hover:bg-slate-100 transition font-bold">&gt;</button>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
-              {MONTHS.map((name,mi)=>{
-                const count=Object.keys(byDay).filter(k=>{ const d=new Date(k); return d.getFullYear()===y && d.getMonth()===mi; }).reduce((n,k)=>n+byDay[k].length,0);
+              {MONTHS.map((name,mi) => {
+                const count = Object.keys(byDay).filter(k => { const d=new Date(k); return d.getFullYear()===y && d.getMonth()===mi; }).reduce((n,k)=>n+byDay[k].length,0);
                 return (
                   <div key={mi} onClick={()=>{setCalDate(new Date(y,mi,1));setSelDay(null);setMode('month');}} className="bg-white rounded-xl border border-slate-200 p-3 shadow-sm cursor-pointer hover:border-sky-300 transition">
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-bold text-sm text-slate-700">{MONTHS_SHORT[mi]}</span>
-                      {count>0 && <span className="text-[10px] font-bold text-white rounded-full px-1.5" style={{backgroundColor:t.secondary}}>{count}</span>}
+                      {count > 0 && <span className="text-[10px] font-bold text-white rounded-full px-1.5" style={{backgroundColor:t.secondary}}>{count}</span>}
                     </div>
                     <MonthGrid t={t} year={y} month={mi} byDay={byDay} today={today} selDay={null} compact />
                   </div>
@@ -291,13 +329,13 @@ ReactDOM.createRoot(document.getElementById('root')).render(<App />);
 
 <script>
 (function(){
-  try{
-    var src=document.getElementById('appsrc').textContent;
-    var out=Babel.transform(src,{presets:[['react',{runtime:'classic',pragma:'React.createElement',pragmaFrag:'React.Fragment'}]]}).code;
+  try {
+    var src = document.getElementById('appsrc').textContent;
+    var out = Babel.transform(src, {presets:[['react',{runtime:'classic',pragma:'React.createElement',pragmaFrag:'React.Fragment'}]]}).code;
     (0,eval)(out);
-  }catch(err){
-    var root=document.getElementById('root');
-    if(root) root.innerHTML='<pre style="padding:20px;color:#b00020;white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,monospace">Startup error:\n\n'+((err&&err.message)||err)+'</pre>';
+  } catch(err) {
+    var root = document.getElementById('root');
+    if(root) root.innerHTML = '<pre style="padding:20px;color:#b00020;white-space:pre-wrap;font:13px/1.5 ui-monospace,Menlo,monospace">Startup error:\n\n'+((err&&err.message)||err)+'</pre>';
     throw err;
   }
 })();
