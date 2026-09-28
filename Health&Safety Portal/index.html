@@ -6,13 +6,19 @@
 <title>IFES Health &amp; Safety Portal</title>
 <link rel="icon" href="https://www.tsg-solutions.com/wp-content/uploads/2026/01/ifes-logo-v3-204x300-1.webp" />
 
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/pizzip@3.1.7/dist/pizzip.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/docxtemplater@3.50.0/build/docxtemplater.js"></script>
+<!-- Libraries are pinned to exact versions so a new release can never change the app
+     overnight, and the integrity hash makes the browser refuse a tampered file.
+     Tailwind's CDN sends no CORS header, so it can be pinned but not hash-checked.
+     SheetJS 0.20.3 comes from its own CDN: npm stops at 0.18.5, which has two known
+     flaws in reading crafted spreadsheets. The last three are only needed on a click,
+     so they load in the background and a slow host cannot hold up the sign-in screen. -->
+<script src="https://cdn.jsdelivr.net/npm/react@18.3.1/umd/react.production.min.js" integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/react-dom@18.3.1/umd/react-dom.production.min.js" integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@babel/standalone@7.29.9/babel.min.js" integrity="sha384-oLbIC13I/8DNBviftYPfOFQS5DC2WUmwk0SyIPmnzu1Ui+vYyATSSBJiJ5ETa4o/" crossorigin="anonymous"></script>
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script defer src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js" integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/pizzip@3.1.7/dist/pizzip.min.js" integrity="sha384-3mvYicTS7UKJFuQYjm4TLHd0AEsGqivIvpOz05D1WC6EY0wjrdMXxlwRAdckMW73" crossorigin="anonymous"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/docxtemplater@3.50.0/build/docxtemplater.js" integrity="sha384-iE2CLpzI//WSW27IS4DPW3L3BJaOxn0tcasTXUDBWsyWw35ruWTPz6ERH7FP14Zg" crossorigin="anonymous"></script>
 <style>@keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}.fade{animation:fade .25s ease-out}</style>
 </head>
 <body>
@@ -37,7 +43,9 @@ const CONFIG = {
   /* Training fallback if sheet is empty. */
   TRAINING_TYPES: [ {id: "Manual Handling", name: "Manual Handling", duration: 36} ],
   /* Fallback instructor if a trainer has no qualification saved. */
-  INSTRUCTOR: { name: "Cormac Farrell", title: "Manual Handling Instructor", qual: "QQI Level 6" }
+  INSTRUCTOR: { name: "Cormac Farrell", title: "Manual Handling Instructor", qual: "QQI Level 6" },
+  /* Site list fallback, only used until the backend sends its Sites sheet. */
+  DEFAULT_SITES: ['Marymount Bedrooms','OPW Ballincollig Garda station','The Railway','MUH Endoscopy','MUH St Claires MMD','Heather House 1st floor','Hanover Street','MUH St Michaels','Cian Small jobs','Boston CNC','Boston Decarb 2026','Heineken']
 };
 const THEME = { primary:'#005C9C', secondary:'#0077C8', lightBg:'#F1F6FA' };
 
@@ -80,8 +88,18 @@ const monthsBetween=(fromIso,toIso)=>{
   if(isNaN(a)||isNaN(b)) return 0;
   return (b.getFullYear()-a.getFullYear())*12 + (b.getMonth()-a.getMonth());
 };
-const genPassword=()=>{ const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; let s=''; for(let i=0;i<8;i++)s+=c[Math.floor(Math.random()*c.length)]; return s; };
+/* Passwords come from the browser's secure random source, not Math.random. */
+const genPassword=()=>{ const c='ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789'; const r=new Uint32Array(10); crypto.getRandomValues(r); let s=''; for(let i=0;i<10;i++)s+=c[r[i]%c.length]; return s; };
 const safeName=(n)=>String(n).replace(/[^A-Za-z0-9]+/g,'_');
+
+/* Sites: shown A-Z so the list stays easy to scan as it grows. canonSite turns
+   "heineken" typed by hand into "Heineken" from the list, so one site is never
+   recorded under two spellings. */
+const sortSites=(list)=>(list||[]).map(s=>String(s).trim()).filter(Boolean).sort((a,b)=>a.localeCompare(b,'en',{sensitivity:'base'}));
+const findSite=(sites,v)=>{ const k=String(v||'').trim().toLowerCase(); return k?(sites||[]).find(s=>s.toLowerCase()===k):undefined; };
+const canonSite=(sites,v)=>findSite(sites,v)||String(v||'').trim();
+/* Records from before the Site column hold an audit's site as "Site: X" in the employee column. */
+const rowSite=(r)=>r.site||(r.certSent==='audit'&&/^Site: /.test(String(r.employee||''))?String(r.employee).slice(6):'');
 
 /* Courses come from the sheet as {name, duration}. Normalise them so the
    name doubles as a stable id, and flag any course whose name contains
@@ -95,9 +113,10 @@ function errText(r){
   if(r.error==='unknown_action') return 'Your backend is running an OLD version. In Apps Script: Deploy > Manage deployments > pencil > Version: New version > Deploy.';
   if(r.error==='auth') return 'Your session expired. Log out and back in.';
   if(r.error==='forbidden') return 'Your login does not have permission for that.';
-  if(r.error==='exists') return 'That one already exists.';
+  if(r.error==='exists') return r.message||'That one already exists.';
   if(r.error==='no_qual') return 'Your login has no qualification saved, so you cannot issue certificates. Ask an admin to add it on the Logins tab.';
   if(r.error==='system_busy') return r.message;
+  if(r.error==='forbidden_role') return 'Your login cannot give that level of access.';
   if(r.message) return r.message;
   return 'Server said: '+(r.error||'unknown error');
 }
@@ -136,6 +155,17 @@ function buildCertBytes(b64,data){
   });
   return doc.getZip().generate({type:'uint8array'});
 }
+/* A CSV carries no note of its encoding. Excel on Windows saves "CSV" as Windows-1252,
+   most other tools save UTF-8, and reading one as the other turns Siobhán into
+   SiobhÃ¡n. Try strict UTF-8 first and fall back to Windows-1252. .xlsx is unaffected. */
+async function readSheetFile(f){
+  const buf=await f.arrayBuffer();
+  if(/\.(csv|txt)$/i.test(f.name||'')||/csv/i.test(f.type||'')){
+    let text; try{ text=new TextDecoder('utf-8',{fatal:true}).decode(buf); }catch(e){ text=new TextDecoder('windows-1252').decode(buf); }
+    return XLSX.read(text.replace(/^\uFEFF/,''),{type:'string'});
+  }
+  return XLSX.read(buf);
+}
 function uint8ToBase64(u8){ let s=''; const chunk=0x8000; for(let i=0;i<u8.length;i+=chunk){ s+=String.fromCharCode.apply(null,u8.subarray(i,i+chunk)); } return btoa(s); }
 function downloadBlob(blob,filename){ const url=URL.createObjectURL(blob); const a=document.createElement('a'); a.href=url; a.download=filename; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1500); }
 const DOCX_MIME='application/vnd.openxmlformats-officedocument.wordprocessingml.document';
@@ -173,16 +203,28 @@ function App(){
   const [training,setTraining]=useState([]);
   const [courses,setCourses]=useState([]);
   const [schedule,setSchedule]=useState([]);
+  const [sites,setSitesState]=useState(sortSites(CONFIG.DEFAULT_SITES));
+  const [mailQuota,setMailQuota]=useState(null);
   const [showPw,setShowPw]=useState(false);
   const skipNextLoad=useRef(false);
   const isAdmin=me&&(me.role==='admin'||me.role==='superadmin');
 
-  /* Apply a bootstrap payload to state and cache it for instant startup next time. */
+  /* The site list changes on its own (add/remove, or a typed site saved while booking),
+     so keep the startup cache in step without waiting for a full reload. */
+  const setSites=(list)=>{
+    const s=sortSites(list); setSitesState(s);
+    const c=store.get(BOOT_CACHE); if(c){ c.sites=s; store.set(BOOT_CACHE,c); }
+  };
+
+  /* Apply a bootstrap payload to state and cache it for instant startup next time.
+     An older backend sends no sites, so the built-in list stands in. */
   const applyBoot=(r)=>{
     setEmployees(r.employees||[]); setTraining(r.training||[]);
     setCourses(normCourses(r.courses||[])); setSchedule(r.schedule||[]);
     if(r.users)setUsers(r.users);
-    store.set(BOOT_CACHE,{employees:r.employees||[],training:r.training||[],courses:r.courses||[],schedule:r.schedule||[],users:r.users||null});
+    const s=sortSites(r.sites||CONFIG.DEFAULT_SITES); setSitesState(s);
+    setMailQuota(typeof r.mailQuota==='number'?r.mailQuota:null);
+    store.set(BOOT_CACHE,{employees:r.employees||[],training:r.training||[],courses:r.courses||[],schedule:r.schedule||[],users:r.users||null,sites:s});
   };
 
   useEffect(()=>{ (async()=>{
@@ -194,6 +236,7 @@ function App(){
         setEmployees(cache.employees||[]); setTraining(cache.training||[]);
         setCourses(normCourses(cache.courses||[])); setSchedule(cache.schedule||[]);
         if(cache.users)setUsers(cache.users);
+        if(cache.sites)setSitesState(sortSites(cache.sites));
       }
       setMe(Object.assign({token:sess.token},sess.me));
     }
@@ -222,7 +265,8 @@ function App(){
     if(d.data){ applyBoot(d.data); skipNextLoad.current=true; }
     setMe({token:d.token,username:d.username,name:d.name,role:d.role,qual:d.qual||''});
   };
-  const logout=()=>{ store.del(SESS); store.del(BOOT_CACHE); setMe(null); setUsers([]); setEmployees([]); setTraining([]); setSchedule([]); };
+  /* Tell the server too, so the session cannot be reused from this device's storage. */
+  const logout=()=>{ const tk=me&&me.token; if(tk) api('logout',{token:tk}).catch(()=>{}); store.del(SESS); store.del(BOOT_CACHE); setMe(null); setUsers([]); setEmployees([]); setTraining([]); setSchedule([]); };
 
   /* Optimistic local updates: rows disappear instantly, server confirms in the background. */
   const patch={
@@ -264,9 +308,9 @@ function App(){
       </nav>
       <main className="max-w-6xl mx-auto px-4 py-8">
         {loadErr && <div className="mb-6 bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 text-sm font-medium">{loadErr}</div>}
-        {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} onDelete={loadData} patch={patch} me={me} />}
-        {tab==='give' && <GiveTraining t={t} me={me} employees={employees} courses={courses} schedule={schedule} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
-        {tab==='schedule' && isAdmin && <Schedule t={t} courses={courses} schedule={schedule} users={users} reload={loadData} patch={patch} />}
+        {tab==='dashboard' && isAdmin && <Dashboard t={t} training={training} sites={sites} onDelete={loadData} patch={patch} me={me} />}
+        {tab==='give' && <GiveTraining t={t} me={me} employees={employees} courses={courses} schedule={schedule} sites={sites} setSites={setSites} mailQuota={mailQuota} isAdmin={isAdmin} onIssued={loadData} reloadCourses={loadData} />}
+        {tab==='schedule' && isAdmin && <Schedule t={t} courses={courses} schedule={schedule} users={users} sites={sites} setSites={setSites} reload={loadData} patch={patch} />}
         {tab==='employees' && isAdmin && <Employees t={t} employees={employees} reload={loadData} patch={patch} />}
         {tab==='people' && isAdmin && <People t={t} me={me} users={users} reload={loadData} patch={patch} />}
       </main>
@@ -285,7 +329,7 @@ function Login({ t, onLogin }){
       if(needCode){ if(!code.trim()){ setErr('Enter your access code.'); setBusy(false); return; } BACKEND_CODE=code.trim(); }
       const r=await api('login',{username:username.trim(),password});
       if(r.ok){ store.set('backend_code',BACKEND_CODE); onLogin({username:r.username,name:r.name,role:r.role,qual:r.qual||'',token:r.token,data:r.data||null}); }
-      else setErr('Wrong username or password.');
+      else setErr(r.error==='locked'?r.message:'Wrong username or password.');
     }catch(e){ if(e&&e.code==='bad_endpoint'){ setErr('That access code does not match. Check the last 12 characters.'); if(needCode)BACKEND_CODE=''; } else setErr('Could not reach the server. Check your internet connection.'); }
     finally{ setBusy(false); }
   };
@@ -310,6 +354,89 @@ function Login({ t, onLogin }){
           <button disabled={busy} style={{backgroundColor:t.secondary}} className="w-full text-white font-bold py-2.5 rounded-lg hover:brightness-95 transition disabled:opacity-60">{busy?'Signing in...':'Sign in'}</button>
         </div>
       </form>
+    </div>
+  );
+}
+
+/* ---------------- Site picker ---------------- */
+/* The saved site list, plus "Other" to type one in. An admin typing a new site
+   can keep it on the list so nobody has to type it twice. A site that arrives
+   from outside (a booked session being run) selects itself, or opens Other with
+   the name filled in if it is not on the list. */
+const OTHER_SITE='__other__';
+function SitePicker({ t, sites, value, onChange, required, canSave, save, onSave, disabled }){
+  const typed=useRef(null);
+  const [other,setOther]=useState(()=>!!String(value||'').trim()&&!findSite(sites,value));
+  useEffect(()=>{
+    if(value===typed.current) return;          // our own keystroke: leave the mode alone
+    const m=findSite(sites,value);
+    if(m){ setOther(false); if(m!==value) onChange(m); }
+    else setOther(!!String(value||'').trim());
+  },[value,sites.join('|')]);
+  const pick=(v)=>{
+    if(v===OTHER_SITE){ typed.current=''; setOther(true); onChange(''); }
+    else { typed.current=null; setOther(false); onChange(v); }
+  };
+  const type=(v)=>{ typed.current=v; onChange(v); };
+  const onList=findSite(sites,value);
+  const cls="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none";
+  return (
+    <div>
+      <label className="block text-xs font-semibold text-slate-600 mb-1">Site / Location{!required && <span className="font-normal text-slate-400"> (optional)</span>}</label>
+      <select disabled={disabled} value={other?OTHER_SITE:(onList||'')} onChange={e=>pick(e.target.value)} className={cls} style={{'--tw-ring-color':t.primary}}>
+        <option value="">{required?'Choose a site...':'No site'}</option>
+        {sites.map(s=><option key={s} value={s}>{s}</option>)}
+        <option value={OTHER_SITE}>Other (type it in)</option>
+      </select>
+      {other && <input disabled={disabled} autoFocus value={value} onChange={e=>type(e.target.value)} maxLength={120} placeholder="Type the site name" className={cls+' mt-2'} style={{'--tw-ring-color':t.primary}} />}
+      {other && onList && <p className="text-xs text-slate-500 mt-1">Already on the list as <b>{onList}</b>, and will be saved under that name.</p>}
+      {other && canSave && String(value||'').trim() && !onList && (
+        <label className="mt-2 flex items-center gap-2 text-xs text-slate-600 cursor-pointer select-none">
+          <input type="checkbox" checked={!!save} onChange={e=>onSave(e.target.checked)} className="w-4 h-4" /> Add to the site list for next time
+        </label>
+      )}
+    </div>
+  );
+}
+
+/* Admin list of sites: add one, or remove one with its x. */
+function SiteManager({ t, sites, setSites }){
+  const [name,setName]=useState(''); const [busy,setBusy]=useState(false); const [delBusy,setDelBusy]=useState(null); const [msg,setMsg]=useState(null);
+  const add=async()=>{
+    const n=name.trim(); if(!n){ setMsg({bad:true,text:'Type a site name.'}); return; }
+    if(findSite(sites,n)){ setMsg({bad:true,text:'That site is already on the list.'}); return; }
+    setBusy(true); setMsg(null);
+    try{ const r=await api('addSite',{token:store.get(SESS).token,name:n});
+      if(r.ok){ setSites(r.sites||sites.concat([n])); setName(''); setMsg({bad:false,text:'Site added.'}); } else setMsg({bad:true,text:errText(r)});
+    }catch(e){ setMsg({bad:true,text:'Could not reach the server.'}); }
+    setBusy(false);
+  };
+  const del=async(s)=>{
+    if(!window.confirm('Take "'+s+'" off the site list?\n\nBookings and records that already use it are not changed.'))return;
+    setDelBusy(s); setMsg(null);
+    try{ const r=await api('deleteSite',{token:store.get(SESS).token,name:s});
+      if(r.ok){ setSites(r.sites||sites.filter(x=>x!==s)); } else setMsg({bad:true,text:errText(r)});
+    }catch(e){ setMsg({bad:true,text:'Could not reach the server.'}); }
+    setDelBusy(null);
+  };
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-3 fade">
+      <h2 className="font-bold text-slate-800">Sites ({sites.length})</h2>
+      <div className="flex gap-2 items-center">
+        <input disabled={busy} value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>{ if(e.key==='Enter'){ e.preventDefault(); add(); } }} maxLength={120} placeholder="New site (e.g. Heineken Brewery)" className="flex-1 min-w-0 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
+        <button disabled={busy} onClick={add} style={{backgroundColor:t.secondary}} className="text-white font-semibold px-4 py-2 rounded-lg text-sm disabled:opacity-60 transition">{busy?'...':'Add'}</button>
+      </div>
+      <p className="text-xs text-slate-400">These fill the site dropdown on Plan Schedule and on audits. "Other" is always there for a one-off site. The list lives on the Sites tab of the Google Sheet too.</p>
+      {msg && <p className={`text-sm font-medium ${msg.bad?'text-red-600':'text-emerald-600'}`}>{msg.text}</p>}
+      <div className="flex flex-wrap gap-2 pt-1">
+        {sites.length===0 && <p className="text-sm text-slate-400 italic">No sites yet.</p>}
+        {sites.map(s=>
+          <span key={s} className={`flex items-center gap-1 bg-slate-100 rounded-full pl-3 pr-1 py-1 text-sm text-slate-700 ${delBusy===s?'pointer-events-none opacity-50':''}`}>
+            {s}
+            <button disabled={delBusy===s} onClick={()=>del(s)} title={'Remove '+s} className="text-slate-400 hover:text-red-500 px-1 font-bold transition">{delBusy===s?'...':'×'}</button>
+          </span>
+        )}
+      </div>
     </div>
   );
 }
@@ -389,12 +516,12 @@ function TrainerCalendar({ t, schedule, courses, onRun }){
 }
 
 /* ---------------- Give training ---------------- */
-function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, reloadCourses }){
+function GiveTraining({ t, me, employees, courses, schedule, sites, setSites, mailQuota, isAdmin, onIssued, reloadCourses }){
   const [schedId,setSchedId]=useState(null);
   const typeList=(courses&&courses.length)?courses:CONFIG.TRAINING_TYPES;
 
   const [sel,setSel]=useState({});
-  const [type,setType]=useState('');
+  const [type,setType]=useState(()=>typeList.length?String(typeList[0].id):'');
   const [newCourse,setNewCourse]=useState('');
   const [newCourseDur,setNewCourseDur]=useState(12);
   const [showCourses,setShowCourses]=useState(false);
@@ -402,10 +529,12 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   const [courseDelBusy,setCourseDelBusy]=useState(null);
   const [courseMsg,setCourseMsg]=useState(null);
 
+  /* Fall back to the first course only when nothing valid is chosen. Decided on the
+     latest value (not the one this render saw), so a session loaded by a quick tap on
+     "Run audit" is never overwritten by this default landing a moment later. */
   useEffect(()=>{
-    if((!type || !typeList.find(x=>x.id == type)) && typeList.length) {
-      setType(typeList[0].id);
-    }
+    if(!typeList.length) return;
+    setType(cur=>(cur && typeList.find(x=>x.id == cur)) ? cur : String(typeList[0].id));
   }, [courses, type]);
 
   const addCourse=async()=>{
@@ -442,7 +571,9 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
   };
 
   const [date,setDate]=useState(todayISO()); const [q,setQ]=useState('');
-  const [site,setSite]=useState(''); const [notes,setNotes]=useState('');
+  const [site,setSite]=useState(''); const [notes,setNotes]=useState(''); const [saveSite,setSaveSite]=useState(true);
+  /* A typed site an admin asked to keep: true only when it is not already on the list. */
+  const wantSave=()=>isAdmin&&saveSite&&!!site.trim()&&!findSite(sites,site);
   const [busy,setBusy]=useState(false); const [msg,setMsg]=useState(null);
   const active=employees.filter(e=>e.active!==false);
   const list=active.filter(e=>!q||String(e.name).toLowerCase().includes(q.toLowerCase()));
@@ -459,12 +590,19 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
     if(chosen.length===0){ setMsg({bad:true,text:'Tick at least one person.'}); return; }
 
     const actualCourseName = courseObj ? courseObj.name : 'Training';
+    const siteName = canonSite(sites, site);
 
-    if(!window.confirm('Issue '+actualCourseName+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+'?\n\nThis will be emailed to each employee, the trainer, and the office.')) return;
+    /* Google caps how many emails the account can send a day (100 recipients on a
+       free Gmail account). Each certificate goes to up to 3 people. Warn before
+       running out rather than finding out from missing emails afterwards. */
+    const need = chosen.length*3;
+    const quotaNote = (mailQuota!==null && need>mailQuota) ? '\n\nWARNING: Google will only send about '+mailQuota+' more email'+(mailQuota===1?'':'s')+' today, so some certificates may not be emailed. They are still recorded and can be downloaded from the Dashboard.' : '';
+    if(!window.confirm('Issue '+actualCourseName+' certificate'+(chosen.length>1?'s':'')+' for '+chosen.length+' '+(chosen.length>1?'people':'person')+(siteName?' at '+siteName:'')+'?\n\nThis will be emailed to each employee, the trainer, and the office.'+quotaNote)) return;
     setBusy(true); setMsg({bad:false,text:'Generating and emailing certificates...'});
     try{
       const b64=await loadCert(CONFIG.CERT_FILE);
-      const tk=store.get(SESS).token; let emailedAll=true; let pdfSuccess=true; let lastPdfError='';
+      const tk=store.get(SESS).token; let emailedAll=true; let pdfSuccess=true; let lastPdfError=''; let noEmail=0; let failed=[];
+      if(wantSave()){ try{ const rs=await api('addSite',{token:tk,name:siteName}); if(rs&&rs.ok&&rs.sites) setSites(rs.sites); }catch(e){} }
 
       const durationMonths = courseObj ? (parseInt(courseObj.duration) || 36) : 36;
 
@@ -472,46 +610,59 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
       const instructorTitle = actualCourseName + ' Instructor';
       const instructorQual = (me && me.qual) || '';
 
+      let n=0;
       for(const e of chosen){
+        n++; setMsg({bad:false,text:`Generating and emailing certificates... ${n} of ${chosen.length}`});
         const issueDate=todayISO();
         const expiryDate=addMonths(date, durationMonths);
 
         const bytes=buildCertBytes(b64,{name:e.name,trainingType:actualCourseName,trainingDate:date,issueDate,expiryDate,durationMonths,instructorName,instructorTitle,instructorQual});
 
-        const r=await api('recordTraining',{token:tk,employee:e.name,email:e.email,trainingType:actualCourseName,trainingDate:date,issueDate,expiryDate,certBase64:uint8ToBase64(bytes)});
-        if(!(r&&r.ok&&r.emailed)) emailedAll=false;
-        if(r && r.ok && r.emailedPdf===false) {
+        const r=await api('recordTraining',{token:tk,employeeId:e.id,employee:e.name,email:e.email,trainingType:actualCourseName,trainingDate:date,issueDate,expiryDate,site:siteName,certBase64:uint8ToBase64(bytes)});
+        if(!(r&&r.ok)){ failed.push(e.name+': '+errText(r)); continue; }
+        if(!r.emailed) emailedAll=false;
+        if(r.noEmail) noEmail++;
+        if(r.emailedPdf===false) {
           pdfSuccess = false;
           lastPdfError = r.pdfError || 'Unknown API failure';
         }
       }
 
-      let finalMsg = `Issued ${chosen.length} certificate(s). Emailed to the Office, Trainer, and Trainee.`;
+      const issued = chosen.length-failed.length;
+      let finalMsg = `Issued ${issued} certificate(s). Emailed to the Office, Trainer, and Trainee.`;
+      if(noEmail) finalMsg += ` ${noEmail} ${noEmail===1?'person has':'people have'} no email address on file, so the office and trainer got theirs.`;
       if(!emailedAll) finalMsg += ' (Note: Some emails bounced).';
+      if(failed.length) finalMsg += ' NOT issued: '+failed.join('; ');
       if(!pdfSuccess) {
          console.error("PDF Conversion Failure Reason: ", lastPdfError);
          finalMsg += ' (Warning: Sent as DOCX. Tell your Admin to click "Run -> authorizeDriveAPI" in Apps Script.)';
       }
 
-      setMsg({bad:false,text: finalMsg});
-      if(schedId){ await api('completeSchedule',{token:tk,id:schedId}); setSchedId(null); }
-      setSel({}); onIssued&&onIssued();
+      if(schedId && issued>0){ try{ await api('completeSchedule',{token:tk,id:schedId}); }catch(e){} setSchedId(null); }
+      setSel({});
+      setMsg({bad:failed.length>0,text: finalMsg});
+      onIssued&&onIssued();
     }catch(err){ setMsg({bad:true,text:'Could not issue: '+((err&&err.message)||'check your internet connection.')}); }
     finally{ setBusy(false); }
   };
 
   const doAudit=async()=>{
-    if(!site.trim()){ setMsg({bad:true,text:'Enter the site for this audit.'}); return; }
+    if(!site.trim()){ setMsg({bad:true,text:'Choose the site for this audit, or pick Other and type it in.'}); return; }
     const actualName = courseObj ? courseObj.name : 'Audit';
-    if(!window.confirm('Mark '+actualName+' complete at '+site.trim()+'?\n\nA confirmation email goes to the office and to you. No certificates are issued.')) return;
+    const siteName = canonSite(sites, site);
+    if(!window.confirm('Mark '+actualName+' complete at '+siteName+'?\n\nA confirmation email goes to the office and to you. No certificates are issued.')) return;
     setBusy(true); setMsg({bad:false,text:'Recording audit...'});
     try{
       const tk=store.get(SESS).token;
-      const r=await api('recordAudit',{token:tk,course:actualName,site:site.trim(),date,notes:notes.trim()});
+      const r=await api('recordAudit',{token:tk,course:actualName,site:siteName,date,notes:notes.trim(),saveSite:wantSave()});
       if(r&&r.ok){
+        /* Close the booked session and clear the form before saying "done", so tapping the
+           next job straight away cannot have its site wiped by this one finishing late. */
+        if(schedId){ try{ await api('completeSchedule',{token:tk,id:schedId}); }catch(e){} setSchedId(null); }
+        if(r.sites) setSites(r.sites);
+        setSite(''); setNotes(''); setSaveSite(true);
         setMsg({bad:false,text:'Audit recorded'+(r.emailed?' and emailed to the office and auditor.':'. (Warning: the email could not be sent.)')});
-        if(schedId){ await api('completeSchedule',{token:tk,id:schedId}); setSchedId(null); }
-        setSite(''); setNotes(''); onIssued&&onIssued();
+        onIssued&&onIssued();
       } else setMsg({bad:true,text:errText(r)});
     }catch(e){ setMsg({bad:true,text:'Could not reach the server.'}); }
     finally{ setBusy(false); }
@@ -565,17 +716,15 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
             <I.lock size={15}/> Your login has no qualification saved, so you cannot issue certificates. Ask an admin to add it on the Logins tab. Audits are still available.
           </div>
         )}
-        {isAudit && (
-          <div className="p-5 space-y-3 border-b border-slate-100">
-            <div className="grid sm:grid-cols-2 gap-4">
-              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Site / Location</label>
-                <input value={site} onChange={e=>setSite(e.target.value)} placeholder="e.g. Building A" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
-              <div><label className="block text-xs font-semibold text-slate-600 mb-1">Notes (optional, included in the email)</label>
-                <input value={notes} onChange={e=>setNotes(e.target.value)} placeholder="Any findings or comments" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
-            </div>
-            <p className="text-xs text-slate-400 flex items-center gap-1.5"><I.clip size={14}/> No certificates are issued for audits. A confirmation email goes to the office and to you.</p>
+        <div className="p-5 space-y-3 border-b border-slate-100">
+          <div className="grid sm:grid-cols-2 gap-4">
+            <SitePicker t={t} sites={sites} value={site} onChange={setSite} required={isAudit} canSave={isAdmin} save={saveSite} onSave={setSaveSite} disabled={busy} />
+            {isAudit && <div><label className="block text-xs font-semibold text-slate-600 mb-1">Notes <span className="font-normal text-slate-400">(optional, emailed and kept on the record)</span></label>
+              <textarea value={notes} onChange={e=>setNotes(e.target.value)} rows={3} maxLength={4000} placeholder="Any findings or comments" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>}
           </div>
-        )}
+          {isAudit && <p className="text-xs text-slate-400 flex items-center gap-1.5"><I.clip size={14}/> No certificates are issued for audits. A confirmation email goes to the office and to you.</p>}
+          {!isAudit && mailQuota!==null && (isAdmin || chosen.length*3>mailQuota) && <p className={`text-xs ${chosen.length*3>mailQuota?'text-amber-700 font-semibold':'text-slate-400'}`}>Emails Google will still send today: {mailQuota}. Each certificate uses up to 3 (office, trainer, trainee).</p>}
+        </div>
         {!isAudit && (
           <div className="p-4 flex items-center gap-3 border-b border-slate-100">
             <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search people" className="flex-1 border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
@@ -601,51 +750,74 @@ function GiveTraining({ t, me, employees, courses, schedule, isAdmin, onIssued, 
 }
 
 /* ---------------- Schedule (admin plans a session) ---------------- */
-function Schedule({ t, courses, schedule, users, reload, patch }){
+function Schedule({ t, courses, schedule, users, sites, setSites, reload, patch }){
   const [course,setCourse]=useState('');
   const [date,setDate]=useState(todayISO());
   const [site,setSite]=useState('');
+  const [saveSite,setSaveSite]=useState(true);
   const [trainer,setTrainer]=useState('');
   const [msg,setMsg]=useState(null);
   const [busy,setBusy]=useState(false);
+  const [showSites,setShowSites]=useState(false);
 
   useEffect(()=>{
-    if(!course && courses.length) setCourse(String(courses[0].id));
-    if(!trainer && users.length) setTrainer(users[0].username);
+    if(courses.length) setCourse(cur=>cur||String(courses[0].id));
+    if(users.length) setTrainer(cur=>cur||users[0].username);
   },[courses, users]);
 
   const save=async()=>{
-    if(!site.trim()){ setMsg({bad:true,text:'Enter a site location.'}); return; }
+    if(!site.trim()){ setMsg({bad:true,text:'Choose a site, or pick Other and type it in.'}); return; }
     if(!course){ setMsg({bad:true,text:'Pick a course.'}); return; }
     if(!trainer){ setMsg({bad:true,text:'Pick a trainer.'}); return; }
+    const siteName=canonSite(sites,site);
+    const keep=saveSite&&!findSite(sites,site);
+
+    /* Same trainer, same day: almost always a mistake, occasionally two short visits. */
+    const clash=(schedule||[]).filter(s=>s.status!=='Done'&&s.trainer===trainer&&String(s.date).slice(0,10)===date);
+    if(clash.length){
+      const who=(users.find(u=>u.username===trainer)||{}).name||trainer;
+      if(!window.confirm(who+' is already booked on '+fmtUK(date)+' at '+clash.map(c=>c.site).join(', ')+'.\n\nBook this session as well?')) return;
+    }
 
     setBusy(true); setMsg({bad:false,text:'Saving session...'});
-    const tk=store.get(SESS).token;
-    const r=await api('addSchedule',{token:tk,course,date,site:site.trim(),trainer});
+    try{
+      const tk=store.get(SESS).token;
+      const r=await api('addSchedule',{token:tk,course,date,site:siteName,trainer,saveSite:keep});
+      if(r.ok){
+        if(r.sites) setSites(r.sites);
+        setSite(''); setSaveSite(true);
+        setMsg({bad:false,text:'Session scheduled at '+siteName+'. It will appear on the trainer\'s dashboard.'+(keep&&r.sites?' '+siteName+' is now on the site list.':'')});
+        reload();
+      }
+      else setMsg({bad:true,text:errText(r)});
+    }catch(e){ setMsg({bad:true,text:'Could not reach the server. Check your internet connection.'}); }
     setBusy(false);
-    if(r.ok){ setSite(''); setMsg({bad:false,text:'Session scheduled. It will appear on the trainer\'s dashboard.'}); reload(); }
-    else setMsg({bad:true,text:errText(r)});
   };
 
   const del=async(s)=>{
     if(!window.confirm('Delete this planned session?'))return;
     patch.removeSchedule(s.id);
     const tk=store.get(SESS).token;
-    const r=await api('deleteSchedule',{token:tk,id:s.id});
+    let r=null; try{ r=await api('deleteSchedule',{token:tk,id:s.id}); }catch(e){}
     if(!r||!r.ok){ alert('Could not delete that session.'); reload(); }
   };
 
+  const today=todayISO();
   const planned=(schedule||[]).filter(s=>s.status!=='Done').sort((a,b)=>new Date(a.date)-new Date(b.date));
 
   return (
     <div className="space-y-6 fade">
-      <h1 className="text-2xl font-bold text-slate-900">Plan Schedule</h1>
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-slate-900">Plan Schedule</h1>
+        <button onClick={()=>setShowSites(v=>!v)} className="text-sm font-semibold hover:opacity-80 transition" style={{color:t.primary}}>{showSites?'Done':'Manage sites'}</button>
+      </div>
       <p className="text-slate-600 -mt-4 text-sm">Assign a trainer to visit a site. The trainer will log in, see their schedule, and select the attendees on the day.</p>
+
+      {showSites && <SiteManager t={t} sites={sites} setSites={setSites} />}
 
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-5 grid sm:grid-cols-2 gap-4 border-b border-slate-100 bg-slate-50/50">
-          <div><label className="block text-xs font-semibold text-slate-600 mb-1">Site / Location</label>
-            <input type="text" value={site} onChange={e=>setSite(e.target.value)} placeholder="e.g. Building A" className="w-full border border-slate-300 rounded-lg px-3 py-2.5 focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+          <SitePicker t={t} sites={sites} value={site} onChange={setSite} required canSave save={saveSite} onSave={setSaveSite} disabled={busy} />
 
           <div><label className="block text-xs font-semibold text-slate-600 mb-1">Trainer</label>
             <select value={trainer} onChange={e=>setTrainer(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2.5 bg-white focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}}>
@@ -674,13 +846,14 @@ function Schedule({ t, courses, schedule, users, reload, patch }){
             const courseObj = courses.find(c=>c.id == s.course || c.name == s.course);
             const displayCourse = courseObj ? (courseObj.audit ? `${courseObj.name} (audit)` : `${courseObj.name} (${courseObj.duration}m)`) : s.course;
 
+            const overdue = String(s.date).slice(0,10) < today;
             return (
               <li key={s.id} className="px-5 py-3.5 flex items-center justify-between hover:bg-slate-50 transition">
-                <div>
+                <div className="min-w-0">
                   <p className="font-bold text-slate-800">{s.site} <span className="text-slate-500 font-medium text-sm ml-2">({displayCourse})</span></p>
-                  <p className="text-xs font-medium text-slate-500 mt-0.5"><span className="text-slate-400">{fmtUK(s.date)}</span> &bull; Trainer: {trainerName}</p>
+                  <p className="text-xs font-medium text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-1.5"><span className="text-slate-400">{fmtUK(s.date)}</span> &bull; Trainer: {trainerName} {overdue && <Badge tone="amber">Overdue - not run yet</Badge>}</p>
                 </div>
-                <button onClick={()=>del(s)} className="text-slate-300 hover:text-red-500 transition p-2"><I.trash size={18}/></button>
+                <button onClick={()=>del(s)} title="Delete this session" className="text-slate-300 hover:text-red-500 transition p-2 shrink-0"><I.trash size={18}/></button>
               </li>
             );
           })}
@@ -732,7 +905,7 @@ function certState(row){
   if(d<=90) return {key:'soon',tone:'amber',label:'Expiring soon'};
   return {key:'valid',tone:'green',label:'Valid'};
 }
-function Dashboard({ t, training, onDelete, patch, me }){
+function Dashboard({ t, training, sites, onDelete, patch, me }){
   const redl=async(r)=>{
     if(!window.confirm('Download the '+r.trainingType+' certificate for '+r.employee+'?'))return;
     try{ const b64=await loadCert(CONFIG.CERT_FILE);
@@ -741,14 +914,55 @@ function Dashboard({ t, training, onDelete, patch, me }){
     }catch(e){ alert('Could not build that certificate.'); }
   };
   const [filter,setFilter]=useState('');
-  const rows=training.map(r=>Object.assign({},r,{st:certState(r)}));
+  const [kind,setKind]=useState('all');       // all | certs | audits
+  const [status,setStatus]=useState('all');   // all | valid | soon | expired
+  const [siteF,setSiteF]=useState('');
+  /* Old records typed "heineken" or "MUH Endoscopy " group under the listed name, and
+     off-list sites that differ only in capitals group together too. */
+  const seenSite={};
+  const groupSite=(v)=>{ const c=canonSite(sites,v); if(!c) return ''; const k=c.toLowerCase(); return seenSite[k]||(seenSite[k]=c); };
+  const rows=training.map(r=>Object.assign({},r,{st:certState(r),siteName:groupSite(rowSite(r))}));
   const count=(k)=>rows.filter(r=>r.st.key===k).length;
-  const shown=rows.filter(r=>!filter||String(r.employee).toLowerCase().includes(filter.toLowerCase())).sort((a,b)=>(a.expiryDate||'').localeCompare(b.expiryDate||''));
+  const siteOpts=sortSites(Object.values(seenSite));
+  const fl=filter.trim().toLowerCase();
+  const shown=rows.filter(r=>{
+    if(kind==='certs'&&r.certSent==='audit') return false;
+    if(kind==='audits'&&r.certSent!=='audit') return false;
+    if(status!=='all'&&r.st.key!==status) return false;
+    if(siteF&&r.siteName!==siteF) return false;
+    if(fl&&![r.employee,r.siteName,r.trainingType,r.trainer,r.notes].some(v=>String(v||'').toLowerCase().includes(fl))) return false;
+    return true;
+  }).sort((a,b)=>(a.expiryDate||'').localeCompare(b.expiryDate||''));
+  const filtered=kind!=='all'||status!=='all'||!!siteF||!!fl;
+  const clearFilters=()=>{ setKind('all'); setStatus('all'); setSiteF(''); setFilter(''); };
+  const pickStatus=(k)=>{ setStatus(s=>s===k?'all':k); if(kind==='audits') setKind('all'); };
+
+  /* Excel copy of exactly what is on screen (after filters), for clients and insurers. */
+  const exportXlsx=()=>{
+    if(typeof XLSX==='undefined'){ alert('The spreadsheet tool is still loading. Try again in a moment.'); return; }
+    const data=shown.map(r=>({
+      'Employee': r.certSent==='audit'?'':r.employee,
+      'Email': r.email||'',
+      'Type': r.trainingType||'',
+      'Site': r.siteName||'',
+      'Date': r.trainingDate||'',
+      'Issued': r.certSent==='audit'?'':(r.issueDate||''),
+      'Expires': r.expiryDate||'',
+      'Status': r.st.label==='-'?'':r.st.label,
+      'Trainer / auditor': r.trainer||'',
+      'Emailed': r.certSent==='audit'?'':(r.certSent==='yes'?'Yes':'No'),
+      'Notes': r.notes||''
+    }));
+    const ws=XLSX.utils.json_to_sheet(data);
+    ws['!cols']=[{wch:26},{wch:28},{wch:22},{wch:28},{wch:12},{wch:12},{wch:12},{wch:14},{wch:20},{wch:9},{wch:40}];
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,'Register');
+    XLSX.writeFile(wb,'IFES_register_'+todayISO()+(siteF?'_'+safeName(siteF):'')+'.xlsx');
+  };
   const del=async(r)=>{
     if(!window.confirm('Delete this record for '+r.employee+'?'))return;
     patch.removeTraining(r.id);
     const tk=store.get(SESS).token;
-    const rs=await api('deleteTraining',{token:tk,id:r.id});
+    let rs=null; try{ rs=await api('deleteTraining',{token:tk,id:r.id}); }catch(e){}
     if(!rs||!rs.ok){ alert('Could not delete that record.'); onDelete&&onDelete(); }
   };
   const cards=[['valid','Valid','text-emerald-600'],['soon','Expiring soon (90 days)','text-amber-600'],['expired','Expired','text-red-600']];
@@ -767,7 +981,7 @@ function Dashboard({ t, training, onDelete, patch, me }){
     <div className="space-y-6 fade">
       <h1 className="text-2xl font-bold text-slate-900">Certificate dashboard</h1>
       <div className="grid grid-cols-3 gap-4">
-        {cards.map(c=><div key={c[0]} className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm"><p className={`text-3xl font-extrabold ${c[2]}`}>{count(c[0])}</p><p className="text-sm font-medium text-slate-500 mt-1">{c[1]}</p></div>)}
+        {cards.map(c=><button key={c[0]} onClick={()=>pickStatus(c[0])} title={status===c[0]?'Show all again':'Show only these in the list below'} className={`text-left bg-white rounded-xl border p-5 shadow-sm transition hover:border-slate-400 ${status===c[0]?'border-slate-500 ring-2 ring-slate-300':'border-slate-200'}`}><p className={`text-3xl font-extrabold ${c[2]}`}>{count(c[0])}</p><p className="text-sm font-medium text-slate-500 mt-1">{c[1]}</p></button>)}
       </div>
       <div className="grid md:grid-cols-2 gap-4">
         <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-sm">
@@ -780,15 +994,30 @@ function Dashboard({ t, training, onDelete, patch, me }){
         </div>
       </div>
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
-        <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3"><h2 className="font-bold text-slate-800">All certificates ({rows.length})</h2><input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Filter by name" className="border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} /></div>
+        <div className="p-4 border-b border-slate-100 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="font-bold text-slate-800">{filtered?`Showing ${shown.length} of ${rows.length} records`:`All records (${rows.length})`}</h2>
+            <div className="flex items-center gap-3">
+              {filtered && <button onClick={clearFilters} className="text-xs text-slate-500 underline hover:text-slate-800">Clear filters</button>}
+              <button onClick={exportXlsx} disabled={shown.length===0} title="Download what is shown as an Excel file" style={{color:t.primary}} className="flex items-center gap-1.5 text-sm font-semibold border border-slate-300 rounded-lg px-3 py-1.5 hover:bg-slate-50 transition disabled:opacity-50"><I.down size={16}/> Excel</button>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <input value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Search name, site, notes" className="col-span-2 sm:col-span-1 border border-slate-300 rounded-lg px-3 py-1.5 text-sm focus:ring-2 focus:outline-none" style={{'--tw-ring-color':t.primary}} />
+            <select value={kind} onChange={e=>setKind(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white"><option value="all">Certs and audits</option><option value="certs">Certificates only</option><option value="audits">Audits only</option></select>
+            <select value={status} onChange={e=>setStatus(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white"><option value="all">Any status</option><option value="valid">Valid</option><option value="soon">Expiring soon</option><option value="expired">Expired</option></select>
+            <select value={siteF} onChange={e=>setSiteF(e.target.value)} className="col-span-2 sm:col-span-1 border border-slate-300 rounded-lg px-2 py-1.5 text-sm bg-white"><option value="">All sites</option>{siteOpts.map(s=><option key={s} value={s}>{s}</option>)}</select>
+          </div>
+        </div>
         <div className="overflow-x-auto"><table className="w-full text-sm">
-          <thead className="bg-slate-50 text-slate-500 text-left border-b border-slate-200"><tr><th className="px-4 py-3 font-semibold">Employee</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Trained</th><th className="px-4 py-3 font-semibold">Expires</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3"></th></tr></thead>
+          <thead className="bg-slate-50 text-slate-500 text-left border-b border-slate-200"><tr><th className="px-4 py-3 font-semibold">Employee</th><th className="px-4 py-3 font-semibold">Type</th><th className="px-4 py-3 font-semibold">Site</th><th className="px-4 py-3 font-semibold">Trained</th><th className="px-4 py-3 font-semibold">Expires</th><th className="px-4 py-3 font-semibold">Status</th><th className="px-4 py-3"></th></tr></thead>
           <tbody>
-            {shown.length===0 && <tr><td colSpan="6" className="px-4 py-8 text-center text-slate-400 italic">No certificates yet.</td></tr>}
+            {shown.length===0 && <tr><td colSpan="7" className="px-4 py-8 text-center text-slate-400 italic">{rows.length?'Nothing matches those filters.':'No certificates yet.'}</td></tr>}
             {shown.map(r=>(
               <tr key={r.id} className="border-t border-slate-100 hover:bg-slate-50 transition">
-                <td className="px-4 py-3 font-bold text-slate-800">{r.employee}</td>
+                <td className="px-4 py-3 font-bold text-slate-800">{r.certSent==='audit'?<span className="font-medium text-slate-500 italic" title={r.notes||''}>{r.notes?(String(r.notes).length>60?String(r.notes).slice(0,60)+'...':r.notes):'Site audit'}</span>:r.employee}</td>
                 <td className="px-4 py-3 font-medium text-slate-600">{r.trainingType}</td>
+                <td className="px-4 py-3 text-slate-600">{r.siteName||<span className="text-slate-300">-</span>}</td>
                 <td className="px-4 py-3 text-slate-500">{fmtUK(r.trainingDate)||'-'}</td>
                 <td className="px-4 py-3 text-slate-500">{fmtUK(r.expiryDate)||'-'}</td>
                 <td className="px-4 py-3"><Badge tone={r.st.tone}>{r.st.label}</Badge></td>
@@ -812,15 +1041,18 @@ function Employees({ t, employees, reload, patch }){
   const dupCount=Object.keys(nameCounts).filter(k=>nameCounts[k]>1).length;
 
   const add=async(e)=>{ e.preventDefault(); if(!name.trim())return; setBusy(true); setMsg({bad:false,text:'Adding employee...'});
-    const tk=store.get(SESS).token; const r=await api('addEmployee',{token:tk,employee:{name:name.trim(),email:email.trim()}}); setBusy(false);
-    if(r.ok){ setName(''); setEmail(''); setMsg({bad:false,text:'Added.'}); reload(); } else setMsg({bad:true,text:errText(r)});
+    try{
+      const tk=store.get(SESS).token; const r=await api('addEmployee',{token:tk,employee:{name:name.trim(),email:email.trim()}});
+      if(r.ok){ setName(''); setEmail(''); setMsg({bad:false,text:'Added.'}); reload(); } else setMsg({bad:true,text:errText(r)});
+    }catch(err){ setMsg({bad:true,text:'Could not reach the server.'}); }
+    setBusy(false);
   };
   const onFile=async(e)=>{ const f=e.target.files[0]; if(!f)return; setBulkMsg({bad:false,text:'Uploading...'});
-    try{ const wb=XLSX.read(await f.arrayBuffer()); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
+    try{ const wb=await readSheetFile(f); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
       const emps=rows.map(r=>{ const low={}; Object.keys(r).forEach(k=>low[k.toString().trim().toLowerCase()]=r[k]); return {name:String(low.name||'').trim(),email:String(low.email||'').trim()}; }).filter(x=>x.name);
       if(emps.length===0){ setBulkMsg({bad:true,text:'No rows found. Needs columns: name, email.'}); e.target.value=''; return; }
       const tk=store.get(SESS).token; const r=await api('bulkAddEmployees',{token:tk,employees:emps});
-      if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added} employees.`}); reload(); } else setBulkMsg({bad:true,text:errText(r)});
+      if(r.ok){ setBulkMsg({bad:false,text:`Added ${r.added} employee${r.added===1?'':'s'}.`+(r.skipped?` Skipped ${r.skipped} already on the list (same name and email).`:'')}); reload(); } else setBulkMsg({bad:true,text:errText(r)});
     }catch(err){ setBulkMsg({bad:true,text:'Could not read that file.'}); }
     e.target.value='';
   };
@@ -898,12 +1130,12 @@ function People({ t, me, users, reload, patch }){
 
   const set=(k,v)=>setF(x=>Object.assign({},x,{[k]:v}));
   const add=async(e)=>{ e.preventDefault(); setMsg({bad:false,text:'Adding login...'}); setCreated(null); setBusy(true);
-    const tk=store.get(SESS).token; const r=await api('addUser',{token:tk,user:f}); setBusy(false);
+    let r=null; try{ const tk=store.get(SESS).token; r=await api('addUser',{token:tk,user:f}); }catch(err){ r={ok:false,message:'Could not reach the server.'}; } setBusy(false);
     if(r.ok){ setCreated({username:f.username,password:f.password}); setF({username:'',name:'',email:'',role:'user',password:genPassword(),qual:''}); setMsg(null); reload(); }
     else setMsg({bad:true,text:errText(r)});
   };
   const onFile=async(e)=>{ const file=e.target.files[0]; if(!file)return; setBulkMsg({bad:false,text:'Uploading...'});
-    try{ const wb=XLSX.read(await file.arrayBuffer()); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
+    try{ const wb=await readSheetFile(file); const rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{defval:''});
       const us=rows.map(r=>{ const low={}; Object.keys(r).forEach(k=>low[k.toString().trim().toLowerCase()]=r[k]);
         return {username:String(low.username||'').trim(),name:String(low.name||low.username||'').trim(),email:String(low.email||'').trim(),role:(String(low.role||'user').trim().toLowerCase()==='admin'&&canMakeAdmin)?'admin':'user',password:String(low.password||'').trim()||genPassword(),qual:String(low.qualification||low.qual||'').trim()}; }).filter(u=>u.username);
       if(us.length===0){ setBulkMsg({bad:true,text:'Needs columns: username, name, email, role, password, qualification.'}); e.target.value=''; return; }
@@ -915,9 +1147,11 @@ function People({ t, me, users, reload, patch }){
     if(!window.confirm('Remove '+u.username+'?'))return;
     patch.removeUser(u.username);
     const tk=store.get(SESS).token;
-    const r=await api('deleteUser',{token:tk,username:u.username});
-    if(!r||!r.ok){ alert('Could not remove.'); reload(); }
+    let r=null; try{ r=await api('deleteUser',{token:tk,username:u.username}); }catch(e){}
+    if(!r||!r.ok){ alert('Could not remove. '+(r?errText(r):'Could not reach the server.')); reload(); }
   };
+  /* Matches the server: an admin manages trainers (and edits themselves); only a super admin touches other admins. */
+  const canManage=(u)=>canMakeAdmin||u.role==='user';
 
   const [edit,setEdit]=useState(null);
   const [editBusy,setEditBusy]=useState(false);
@@ -928,7 +1162,7 @@ function People({ t, me, users, reload, patch }){
     const tk=store.get(SESS).token;
     const payload={username:edit.username,name:edit.name,email:edit.email,qual:edit.qual};
     if(canMakeAdmin && edit.role!=='superadmin') payload.role=edit.role;
-    const r=await api('updateUser',{token:tk,user:payload});
+    let r=null; try{ r=await api('updateUser',{token:tk,user:payload}); }catch(e){ r={ok:false,message:'Could not reach the server.'}; }
     setEditBusy(false);
     if(r&&r.ok){ setEdit(null); reload(); }
     else setEditMsg(errText(r));
@@ -965,7 +1199,7 @@ function People({ t, me, users, reload, patch }){
       <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
         <div className="p-4 border-b border-slate-100"><h2 className="font-bold text-slate-800">All logins ({users.length})</h2></div>
         <div className="overflow-x-auto"><table className="w-full text-sm"><thead className="bg-slate-50 text-slate-500 text-left border-b border-slate-200"><tr><th className="px-4 py-3 font-semibold">Name</th><th className="px-4 py-3 font-semibold">Username</th><th className="px-4 py-3 font-semibold">Email</th><th className="px-4 py-3 font-semibold">Qualification</th><th className="px-4 py-3 font-semibold">Access</th><th className="px-4 py-3"></th></tr></thead>
-          <tbody>{users.map(u=><tr key={u.username} className="border-t border-slate-100 hover:bg-slate-50 transition"><td className="px-4 py-3 font-bold text-slate-800">{u.name}</td><td className="px-4 py-3 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-3 text-slate-600">{u.email||'-'}</td><td className="px-4 py-3 text-slate-600">{u.qual||<span className="text-amber-600 font-medium">not set</span>}</td><td className="px-4 py-3"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-3 text-right"><div className="flex items-center justify-end gap-2"><button onClick={()=>openEdit(u)} title="Edit login" className="text-slate-300 hover:text-sky-600 transition p-1"><I.pencil size={17}/></button>{u.username!==me.username && <button onClick={()=>del(u)} title="Remove login" className="text-slate-300 hover:text-red-500 transition p-1"><I.trash size={18}/></button>}</div></td></tr>)}</tbody>
+          <tbody>{users.map(u=><tr key={u.username} className="border-t border-slate-100 hover:bg-slate-50 transition"><td className="px-4 py-3 font-bold text-slate-800">{u.name}</td><td className="px-4 py-3 text-slate-600 font-mono text-xs">{u.username}</td><td className="px-4 py-3 text-slate-600">{u.email||'-'}</td><td className="px-4 py-3 text-slate-600">{u.qual||<span className="text-amber-600 font-medium">not set</span>}</td><td className="px-4 py-3"><Badge tone={u.role==='superadmin'?'blue':u.role==='admin'?'green':'slate'}>{roleLabel(u.role)}</Badge></td><td className="px-4 py-3 text-right"><div className="flex items-center justify-end gap-2">{(canManage(u)||u.username===me.username) && <button onClick={()=>openEdit(u)} title="Edit login" className="text-slate-300 hover:text-sky-600 transition p-1"><I.pencil size={17}/></button>}{u.username!==me.username && canManage(u) && <button onClick={()=>del(u)} title="Remove login" className="text-slate-300 hover:text-red-500 transition p-1"><I.trash size={18}/></button>}</div></td></tr>)}</tbody>
         </table></div>
       </div>
       {edit && (
